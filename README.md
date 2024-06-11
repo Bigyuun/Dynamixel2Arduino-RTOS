@@ -1,36 +1,82 @@
 # DYNAMIXEL2Arduino [![Build Status](https://github.com/ROBOTIS-GIT/Dynamixel2Arduino/workflows/dynamixel2arduino_ci/badge.svg)](https://github.com/ROBOTIS-GIT/Dynamixel2Arduino)
 
 
-## Summary
+# Summary
 
 This is the Dynamixel motor control code with Dynamixel2Arduino API on RTOS system.
 
 It consist of 2 thread, serial-write & serial-read.
 
-We can publish the command with arguments as string, and subscribe the motor states from OpenRB-150.
+You can publish the command with arguments as string, and subscribe the motor states from OpenRB-150.
 
-## Environments
+# Environments
 
 - MCU : OpenRB-150
+
 - Arduino IDE (2.3.2)
 
-## Protocol of serial-communication
+- Library
+  > Dynamixel2Arduino (0.7.0)
+  
+  > FreeRTOS_SAMD21 (2.3.0)
 
-- STX → /
-- CTX → ;
+# Protocol of serial-communication
+
+- STX → '/'
+- CTX → ';'
+- split → ','
 - Substances
-    - Read : Function name and its arguments
-    - Write : motor state
+    - Read  (PC to MCU) : Function name and its arguments
+    - Write (MCU to PC) : motor state</br>
+      (/ID, hardware_error, Moving, PresentPosition, PresentVelocity, PresentCurrent;)
 
-## Code
-👉🏻 [Demo code] (https://github.com/Bigyuun/Dynamixel2Arduino-RTOS/blob/master/examples/RTOS/control_serialRW/control_serialRW.ino)
+# Description
 
-### configuration
-- control_serialRW.ino
-- definition.hpp
+- **Serial Write**
+  
+  MCU(OpenRB-150) send the motor states by serial-communication
+  
+  - Normal mode - using ```readControlTableItem()``` from Dynamixel2Arduino API.
+  - Sync mode - using ```SyncRead()``` from Dynamixel2Arduino API.
+
+- **Serial Read**
+
+  MCU(OpenRB-150) receive the protocol by serial-communication
+  - Normal mode & Sync mode are the same
 
 
-## Example
+# Code
+
+### Normal mode 
+`Serial read` use Dynamixel2Arduino class member function (using **readControlTableItem** API)
+
+> ### Demo
+> 👉🏻 [code] (https://github.com/Bigyuun/Dynamixel2Arduino-RTOS/blob/master/examples/RTOS/control_serialRW/control_serialRW.ino)
+> 
+> ### configuration 
+> - RTOS_readControlTableItem.ino
+> - definition.hpp
+>
+> ![Dynamixel2Arduino Class](./images/Dynamixel2ArduinoClass.png)
+https://emanual.robotis.com/docs/en/parts/controller/openrb-150/
+---
+
+### Sync mode
+`Serial read` use Dynamixel2Arduino Master class member > function
+> 
+> ### Demo
+> 👉🏻 [code] (https://github.com/Bigyuun/> Dynamixel2Arduino-RTOS/blob/master/examples/> RTOS/control_serialRW/RTOS_sync_read.ino)
+> 
+>   ### configuration
+>   - RTOS_sync_read.ino
+>   - definition.hpp
+>   - control_table.hpp
+> 
+>   ![Dynamixel2Arduino Master Class](./images/Dynamixel2ArduinoMasterClass.png)
+https://emanual.robotis.com/docs/en/parts/controller/openrb-150/
+
+
+# Usage
 ### Serial Write (MCU to PC)
 
 - **Form**  
@@ -45,7 +91,7 @@ We can publish the command with arguments as string, and subscribe the motor sta
 
 - **Form**
   
-  /Functinos name(Dynamixel2Arduino), arg1, arg2, ...;
+  /Function name(Dynamixel2Arduino), arg1, arg2, ...;
 
 - **Dynamixel2Arduino API**
     - For using ‘dxl.setOperatingMode(1, OP_POSITION)’
@@ -72,11 +118,13 @@ We can publish the command with arguments as string, and subscribe the motor sta
         
     - Task information
       
-      If you want to check the task information about each multi-thread each, you can send
+      If you want to check the task information about each multi-thread, you can send
       
       → /task;
         
         ![Arduino Serial Monitor](./images/Untitled2.png)
+
+
 
 ## Serial and Direction Pin definitions of ROBOTIS controllers
  - When running DYNAMIXEL without DYNAMIXEL Shields on OpenCM9.04, OpenCR or custom boards, you might need to change the Serial and DYNAMIXEL Direction Pin.
