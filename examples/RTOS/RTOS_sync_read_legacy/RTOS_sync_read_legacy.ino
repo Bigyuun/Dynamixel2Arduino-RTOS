@@ -53,6 +53,58 @@ bool monitoring_flag = true;
 // Dynamixel
 Dynamixel2Arduino dxl(DXL_SERIAL, DXL_DIR_PIN);
 uint8_t g_num_of_motors = 0;
+uint8_t DXL_ID_LIST[DXL_ID_CNT];
+
+int8_t g_torque_enable[DXL_ID_CNT];
+int8_t g_moving[DXL_ID_CNT];
+int16_t g_present_current[DXL_ID_CNT];
+int32_t g_present_velocity[DXL_ID_CNT];
+int32_t g_present_position[DXL_ID_CNT];
+int32_t g_hardware_error[DXL_ID_CNT];
+
+/**
+* @author DY
+* @note
+    Declare each structures for read multi-data
+    In this case,
+      - torque_enable
+      - moving
+      - present_current
+      - present_velocity
+      - present_position
+      - hardware_error
+*/
+SyncReadData_t sr_data[DXL_ID_CNT];
+const uint16_t user_pkt_buf_cap = 128;
+
+uint8_t user_pkt_buf_torque_enable[user_pkt_buf_cap];
+DYNAMIXEL::InfoSyncReadInst_t sr_infos_torque_enable;
+DYNAMIXEL::XELInfoSyncRead_t info_xels_sr_torque_enable[DXL_ID_CNT];
+
+uint8_t user_pkt_buf_moving[user_pkt_buf_cap];
+DYNAMIXEL::InfoSyncReadInst_t sr_infos_moving;
+DYNAMIXEL::XELInfoSyncRead_t info_xels_sr_moving[DXL_ID_CNT];
+
+uint8_t user_pkt_buf_present_current[user_pkt_buf_cap];
+DYNAMIXEL::InfoSyncReadInst_t sr_infos_present_current;
+DYNAMIXEL::XELInfoSyncRead_t info_xels_sr_present_current[DXL_ID_CNT];
+
+uint8_t user_pkt_buf_present_velocity[user_pkt_buf_cap];
+DYNAMIXEL::InfoSyncReadInst_t sr_infos_present_velocity;
+DYNAMIXEL::XELInfoSyncRead_t info_xels_sr_present_velocity[DXL_ID_CNT];
+
+uint8_t user_pkt_buf_present_position[user_pkt_buf_cap];
+DYNAMIXEL::InfoSyncReadInst_t sr_infos_present_position;
+DYNAMIXEL::XELInfoSyncRead_t info_xels_sr_present_position[DXL_ID_CNT];
+
+uint8_t user_pkt_buf_hardware_error[user_pkt_buf_cap];
+DYNAMIXEL::InfoSyncReadInst_t sr_infos_hardware_error;
+DYNAMIXEL::XELInfoSyncRead_t info_xels_sr_hardware_error[DXL_ID_CNT];
+
+// TEST
+uint8_t user_pkt_buf[user_pkt_buf_cap];
+DYNAMIXEL::InfoSyncReadInst_t sr_infos;
+DYNAMIXEL::XELInfoSyncRead_t info_xels_sr[DXL_ID_CNT];
 
 // RTOS handler
 TaskHandle_t Handle_aTask;
@@ -90,7 +142,6 @@ static void thread_serial_read( void *pvParameters )
       dynamixel_function_callback(v_command);
     }
 
-    xSemaphoreTake(serial_mutex, 100 / portTICK_PERIOD_MS);
     SERIAL.print("[Thread-Serial READ] Command: [size]: ");
     SERIAL.print(v_command.size());
     SERIAL.print(" / [value]: ");
@@ -104,7 +155,6 @@ static void thread_serial_read( void *pvParameters )
       Serial.println("Error parsing and storing values!");
     }
     SERIAL.flush();
-    xSemaphoreGive(serial_mutex);
 
     vTaskDelay( 1 / portTICK_PERIOD_MS ); // Never delete
   }
@@ -122,41 +172,106 @@ static void thread_serial_write( void *pvParameters )
   SERIAL.println("Serial write node is up.");
   
   TickType_t lastWakeTime = xTaskGetTickCount();
+  
+  uint8_t recv_cnt_te = dxl.syncRead(&sr_infos_torque_enable);
+  uint8_t recv_cnt_m = dxl.syncRead(&sr_infos_moving);
+  uint8_t recv_cnt_pc = dxl.syncRead(&sr_infos_present_current);
+  uint8_t recv_cnt_pv = dxl.syncRead(&sr_infos_present_velocity);
+  uint8_t recv_cnt_pp = dxl.syncRead(&sr_infos_present_position);
+  uint8_t recv_cnt_he = dxl.syncRead(&sr_infos_hardware_error);
+
+  uint8_t torque_enable[DXL_ID_CNT];
+  uint8_t moving[DXL_ID_CNT] ;
+  float present_cur[DXL_ID_CNT];
+  float present_vel[DXL_ID_CNT];
+  float present_pos[DXL_ID_CNT];
+  uint8_t err[DXL_ID_CNT];
+
+  // TEST
+  // uint8_t recv_cnt = dxl.syncRead(&sr_infos);
+
   while(1){
+
     DelayMsUntil(&lastWakeTime, 1000/SERIAL_WRITE_FREQUENCY);
 
-    for (int i=1; i<=g_num_of_motors; i++) {
-      
-      uint8_t num = i;
+    recv_cnt_te = dxl.syncRead(&sr_infos_torque_enable);
+    recv_cnt_m = dxl.syncRead(&sr_infos_moving);
+    recv_cnt_pc = dxl.syncRead(&sr_infos_present_current);
+    recv_cnt_pv = dxl.syncRead(&sr_infos_present_velocity);
+    recv_cnt_pp = dxl.syncRead(&sr_infos_present_position);
+    recv_cnt_he = dxl.syncRead(&sr_infos_hardware_error);
 
-      // dxl.*** function will make process delay itself
-      uint8_t err = dxl.readControlTableItem(HARDWARE_ERROR_STATUS, i);
-      uint8_t moving = dxl.readControlTableItem(MOVING, i);
-      float present_pos_degree = dxl.getPresentPosition(i, UNIT_DEGREE);
-      float present_vel_rpm = dxl.getPresentVelocity(i, UNIT_RPM);
-      float present_cur_mA = dxl.getPresentCurrent(i, UNIT_MILLI_AMPERE);
-
-      if (monitoring_flag) {
-        xSemaphoreTake(serial_mutex, portMAX_DELAY);
-        SERIAL.print("[Thread-Serial Write] MOTOR #");
-        SERIAL.print(i);
-        SERIAL.print(" -> Present Pos(Deg)= ");
-        SERIAL.print(present_pos_degree);
-        SERIAL.print(" / Current(mA) = ");
-        SERIAL.print(present_cur_mA);
-        SERIAL.print(" - MOVING: ");
-        SERIAL.println(moving);
-        SERIAL.flush();
-        xSemaphoreGive(serial_mutex);
+    if(recv_cnt_te > 0) {
+      for(uint8_t i = 0; i < recv_cnt_te; i++) {
+        torque_enable[i] = sr_data[i].torque_enable;
       }
-      else {
+    } else {
+      SERIAL.print("SyncRead Current Fail, Lib error code: ");
+      SERIAL.println(dxl.getLastLibErrCode());
+    }
+
+    if(recv_cnt_m > 0) {
+      for(uint8_t i = 0; i < recv_cnt_m; i++) {
+        moving[i] = sr_data[i].moving;
+      }
+    } else {
+      SERIAL.print("SyncRead Current Fail, Lib error code: ");
+      SERIAL.println(dxl.getLastLibErrCode());
+    }
+
+    if(recv_cnt_pc > 0) {
+      for(uint8_t i = 0; i < recv_cnt_pc; i++) {
+        present_cur[i] = sr_data[i].present_current;
+      }
+    } else {
+      SERIAL.print("SyncRead Current Fail, Lib error code: ");
+      SERIAL.println(dxl.getLastLibErrCode());
+    }
+
+    if(recv_cnt_pv > 0) {
+      for(uint8_t i = 0; i < recv_cnt_pv; i++) {
+        present_vel[i] = sr_data[i].present_velocity;
+      }
+    } else {
+      SERIAL.print("SyncRead Velocity Fail, Lib error code: ");
+      SERIAL.println(dxl.getLastLibErrCode());
+    }
+
+    if(recv_cnt_pp > 0) {
+      for(uint8_t i = 0; i < recv_cnt_pp; i++) {
+        present_pos[i] = sr_data[i].present_position;
+      }
+    } else {
+      SERIAL.print("SyncRead Position Fail, Lib error code: ");
+      SERIAL.println(dxl.getLastLibErrCode());
+    }
+
+    if (monitoring_flag) {
+      for(int i=0; i<DXL_ID_CNT; i++){
+        SERIAL.print("ID: ");
+        SERIAL.print(i);
+        SERIAL.print(", Torque Enable: ");
+        SERIAL.print(torque_enable[i]);
+        SERIAL.print(", Moving: ");
+        SERIAL.print(moving[i]);
+        SERIAL.print(", Cur: ");
+        SERIAL.print(present_cur[i]);
+        SERIAL.print(", Vel: ");
+        SERIAL.print(present_vel[i]);
+        SERIAL.print(", Pos: ");
+        SERIAL.print(present_pos[i]);
+        SERIAL.print(", Hardware Err: ");
+        SERIAL.println(err[i]);
+      }
+    }
+    else {
+      for(int i=0; i<DXL_ID_CNT; i++){
         char msg[50];
-        sprintf(msg, "/%d,%d,%d,%f,%f,%f;", num, err, moving, present_pos_degree, present_vel_rpm, present_cur_mA);
-        xSemaphoreTake(serial_mutex, portMAX_DELAY);
+        sprintf(msg, "/%d,%d,%d,%f,%f,%f,%d;", i+1, torque_enable[i], moving[i], present_cur[i], present_vel[i], present_pos[i], err[i]);
         SERIAL.println(msg);
         SERIAL.flush();
-        xSemaphoreGive(serial_mutex);
       }
+      
     }
 
     vTaskDelay( 1 / portTICK_PERIOD_MS ); // Never delete
@@ -226,17 +341,19 @@ void dynamixel_init()
 
   SERIAL.print("DXL_BAUDRATE: ");
   SERIAL.println(DXL_BAUDRATE);
-  SERIAL.print("DXL_PROTOCOL_VERSION: ");
-  SERIAL.println(DXL_PROTOCOL_VERSION);
+  SERIAL.print("DYNAMIXEL_PROTOCOL_VERSION: ");
+  SERIAL.println(DYNAMIXEL_PROTOCOL_VERSION);
   SERIAL.print("OPERATION_MODE: ");
   SERIAL.println(OP_MODE);
 
   // Set Port Protocol Version. This has to match with DYNAMIXEL protocol version.
-  if(!dxl.setPortProtocolVersion(DXL_PROTOCOL_VERSION)) SERIAL.println("setPortProtocolVersion() Fail.");
+  if(!dxl.setPortProtocolVersion(DYNAMIXEL_PROTOCOL_VERSION)) SERIAL.println("setPortProtocolVersion() Fail.");
   
+  //////////////////////////////////////////////////////////////////
   // Find motors
+  //////////////////////////////////////////////////////////////////
   char str_num_of_motors[50];
-  SERIAL.println("Founding motors...");
+  SERIAL.println("Searching motors...");
   for (int i=1; i<=252; i++) {
     bool success = dxl.ping(i);
     if (success) {g_num_of_motors++;}
@@ -250,19 +367,152 @@ void dynamixel_init()
   SERIAL.println("100 %");
   sprintf(str_num_of_motors, "Found %d motors.", g_num_of_motors);
   SERIAL.println(str_num_of_motors);
+  if (g_num_of_motors == DXL_ID_CNT) {
+    SERIAL.println("Setting & Searching number of motors is same... OK");
+  }
+  else {
+    SERIAL.println("Setting & Searching number of motors is not same... WARNING");
+  }
 
+  //////////////////////////////////////////////////////////////////
   // set default
+  //////////////////////////////////////////////////////////////////
   for (int i=1; i<=g_num_of_motors; i++) {
     // Get DYNAMIXEL information
     if(!dxl.ping(i)) SERIAL.println("ping() Fail.");  
     if(!dxl.setOperatingMode(i, OP_MODE)) SERIAL.println("setOperatingMode() Fail.");
+    
     // Turn off torque when configuring items in EEPROM area
-    if(!dxl.torqueOn(i)) SERIAL.println("torqueOn() Fail.");  
+    if(!dxl.torqueOff(i)) SERIAL.println("torqueOff() Fail.");  
+    // if(!dxl.torqueOn(i)) SERIAL.println("torqueOn() Fail.");  
+
     // Set Position PID Gains
     if(!dxl.writeControlTableItem(POSITION_P_GAIN, i, DXL_POSITION_P_GAIN)) SERIAL.println("writeControlTableItem(POSITION_P_GAIN) Fail.");
     if(!dxl.writeControlTableItem(POSITION_I_GAIN, i, DXL_POSITION_I_GAIN)) SERIAL.println("writeControlTableItem(POSITION_I_GAIN) Fail.");
     if(!dxl.writeControlTableItem(POSITION_D_GAIN, i, DXL_POSITION_D_GAIN)) SERIAL.println("writeControlTableItem(POSITION_D_GAIN) Fail.");
   }
+  dxl.torqueOn(BROADCAST_ID);
+
+
+  //////////////////////////////////////////////////////////////////
+  // Fill the members of structure to syncRead using external user packet buffer
+  //////////////////////////////////////////////////////////////////
+
+  // set motor ID
+  for (int i=0; i<DXL_ID_CNT; i++) {
+    DXL_ID_LIST[i] = i+1;
+  }
+
+  // torque_enable =============================================
+  sr_infos_torque_enable.packet.p_buf = user_pkt_buf_torque_enable;
+  sr_infos_torque_enable.packet.buf_capacity = user_pkt_buf_cap;
+  sr_infos_torque_enable.packet.is_completed = false;
+  sr_infos_torque_enable.addr = ADDR_TORQUE_ENABLE;
+  sr_infos_torque_enable.addr_length = ADDR_LEN_TORQUE_ENABLE;
+  sr_infos_torque_enable.p_xels = info_xels_sr_torque_enable;
+  sr_infos_torque_enable.xel_count = 0;  
+
+  for(int i=0; i<DXL_ID_CNT; i++){
+    info_xels_sr_torque_enable[i].id = DXL_ID_LIST[i];
+    info_xels_sr_torque_enable[i].p_recv_buf = (uint8_t*)&sr_data[i].torque_enable;
+    sr_infos_torque_enable.xel_count++;
+  }
+  sr_infos_torque_enable.is_info_changed = true;
+
+  // moving =============================================
+  sr_infos_moving.packet.p_buf = user_pkt_buf_moving;
+  sr_infos_moving.packet.buf_capacity = user_pkt_buf_cap;
+  sr_infos_moving.packet.is_completed = false;
+  sr_infos_moving.addr = ADDR_MOVING;
+  sr_infos_moving.addr_length = ADDR_LEN_MOVING;
+  sr_infos_moving.p_xels = info_xels_sr_moving;
+  sr_infos_moving.xel_count = 0;  
+
+  for(int i=0; i<DXL_ID_CNT; i++){
+    info_xels_sr_moving[i].id = DXL_ID_LIST[i];
+    info_xels_sr_moving[i].p_recv_buf = (uint8_t*)&sr_data[i].moving;
+    sr_infos_moving.xel_count++;
+  }
+  sr_infos_moving.is_info_changed = true;
+
+  // present_current =============================================
+  sr_infos_present_current.packet.p_buf = user_pkt_buf_present_current;
+  sr_infos_present_current.packet.buf_capacity = user_pkt_buf_cap;
+  sr_infos_present_current.packet.is_completed = false;
+  sr_infos_present_current.addr = ADDR_PRESENT_CURRENT;
+  sr_infos_present_current.addr_length = ADDR_LEN_PRESENT_CURRENT;
+  sr_infos_present_current.p_xels = info_xels_sr_present_current;
+  sr_infos_present_current.xel_count = 0;  
+
+  for(int i=0; i<DXL_ID_CNT; i++){
+    info_xels_sr_present_current[i].id = DXL_ID_LIST[i];
+    info_xels_sr_present_current[i].p_recv_buf = (uint8_t*)&sr_data[i].present_current;
+    sr_infos_present_current.xel_count++;
+  }
+  sr_infos_present_current.is_info_changed = true;
+
+  // present_velocity =============================================
+  sr_infos_present_velocity.packet.p_buf = user_pkt_buf_present_velocity;
+  sr_infos_present_velocity.packet.buf_capacity = user_pkt_buf_cap;
+  sr_infos_present_velocity.packet.is_completed = false;
+  sr_infos_present_velocity.addr = ADDR_PRESENT_VELOCITY;
+  sr_infos_present_velocity.addr_length = ADDR_LEN_PRESENT_VELOCITY;
+  sr_infos_present_velocity.p_xels = info_xels_sr_present_velocity;
+  sr_infos_present_velocity.xel_count = 0;  
+
+  for(int i=0; i<DXL_ID_CNT; i++){
+    info_xels_sr_present_velocity[i].id = DXL_ID_LIST[i];
+    info_xels_sr_present_velocity[i].p_recv_buf = (uint8_t*)&sr_data[i].present_velocity;
+    sr_infos_present_velocity.xel_count++;
+  }
+  sr_infos_present_velocity.is_info_changed = true;
+
+  // present_position =============================================
+  sr_infos_present_position.packet.p_buf = user_pkt_buf_present_position;
+  sr_infos_present_position.packet.buf_capacity = user_pkt_buf_cap;
+  sr_infos_present_position.packet.is_completed = false;
+  sr_infos_present_position.addr = ADDR_PRESENT_POSITION;
+  sr_infos_present_position.addr_length = ADDR_LEN_PRESENT_POSITION;
+  sr_infos_present_position.p_xels = info_xels_sr_present_position;
+  sr_infos_present_position.xel_count = 0;  
+
+  for(int i=0; i<DXL_ID_CNT; i++){
+    info_xels_sr_present_position[i].id = DXL_ID_LIST[i];
+    info_xels_sr_present_position[i].p_recv_buf = (uint8_t*)&sr_data[i].present_position;
+    sr_infos_present_position.xel_count++;
+  }
+  sr_infos_present_position.is_info_changed = true;
+
+  // hardware_error =============================================
+  sr_infos_hardware_error.packet.p_buf = user_pkt_buf_hardware_error;
+  sr_infos_hardware_error.packet.buf_capacity = user_pkt_buf_cap;
+  sr_infos_hardware_error.packet.is_completed = false;
+  sr_infos_hardware_error.addr = ADDR_HARDWARE_ERROR;
+  sr_infos_hardware_error.addr_length = ADDR_LEN_HARDWARE_ERROR;
+  sr_infos_hardware_error.p_xels = info_xels_sr_hardware_error;
+  sr_infos_hardware_error.xel_count = 0;  
+
+  for(int i=0; i<DXL_ID_CNT; i++){
+    info_xels_sr_hardware_error[i].id = DXL_ID_LIST[i];
+    info_xels_sr_hardware_error[i].p_recv_buf = (uint8_t*)&sr_data[i].hardware_error;
+    sr_infos_hardware_error.xel_count++;
+  }
+  sr_infos_hardware_error.is_info_changed = true;
+
+
+  sr_infos.packet.p_buf = user_pkt_buf;
+  sr_infos.packet.buf_capacity = user_pkt_buf_cap;
+  sr_infos.packet.is_completed = false;
+  sr_infos.addr = 126;
+  sr_infos.addr_length = 10;
+  sr_infos.p_xels = info_xels_sr;
+  sr_infos.xel_count = 0;
+  for(int i=0; i<DXL_ID_CNT; i++){
+    info_xels_sr[i].id = DXL_ID_LIST[i];
+    info_xels_sr[i].p_recv_buf = (uint8_t*)&sr_data[i].present_current;
+    sr_infos.xel_count++;
+  }
+  sr_infos.is_info_changed = true;
 
   SERIAL.println("Dynamixel initilaizing... OK");
 }

@@ -109,4 +109,23 @@ void setup() {
 
 void loop() {
   // put your main code here, to run repeatedly:
+  DEBUG_SERIAL.println("Refer to eManual for more details.");
+  DEBUG_SERIAL.println("https://emanual.robotis.com/docs/en/dxl/");
+  DEBUG_SERIAL.print("Read for PROTOCOL ");
+  DEBUG_SERIAL.print(DXL_PROTOCOL_VERSION, 1);
+  DEBUG_SERIAL.print(", ID ");
+  DEBUG_SERIAL.println(DXL_ID);
+  
+  // Read DYNAMIXEL ID
+  dxl.read(DXL_ID, ID_ADDR, ID_ADDR_LEN, (uint8_t*)&returned_id, sizeof(returned_id), TIMEOUT);
+  DEBUG_SERIAL.print("ID : ");
+  DEBUG_SERIAL.println(returned_id);
+  // Read DYNAMIXEL Baudrate
+  dxl.read(DXL_ID, BAUDRATE_ADDR, BAUDRATE_ADDR_LEN, (uint8_t*)&returned_baudrate, sizeof(returned_baudrate), TIMEOUT);
+  DEBUG_SERIAL.print("Baud Rate : ");
+  DEBUG_SERIAL.println(returned_baudrate);
+  // Read DYNAMIXEL Present Position
+  dxl.read(DXL_ID, PRESENT_POSITION_ADDR, PRESENT_POSITION_ADDR_LEN, (uint8_t*)&present_position, sizeof(present_position), TIMEOUT);
+  DEBUG_SERIAL.print("Present Position : ");
+  DEBUG_SERIAL.println(present_position);
 }
