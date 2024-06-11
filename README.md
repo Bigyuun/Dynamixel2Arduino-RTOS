@@ -51,7 +51,7 @@ You can publish the command with arguments as string, and subscribe the motor st
 `Serial read` use Dynamixel2Arduino class member function (using **readControlTableItem** API)
 
 > ### Demo
-> 👉🏻 [code] (https://github.com/Bigyuun/Dynamixel2Arduino-RTOS/blob/master/examples/RTOS/control_serialRW/control_serialRW.ino)
+> 👉🏻 [code] (https://github.com/Bigyuun/Dynamixel2Arduino-RTOS/blob/master/examples/RTOS/RTOS_readControlTableItem/RTOS_readControlTableItem.ino)
 > 
 > ### configuration 
 > - RTOS_readControlTableItem.ino
@@ -65,7 +65,7 @@ https://emanual.robotis.com/docs/en/parts/controller/openrb-150/
 `Serial read` use Dynamixel2Arduino Master class member > function
 > 
 > ### Demo
-> 👉🏻 [code] (https://github.com/Bigyuun/> Dynamixel2Arduino-RTOS/blob/master/examples/> RTOS/control_serialRW/RTOS_sync_read.ino)
+> 👉🏻 [code] (https://github.com/Bigyuun/> Dynamixel2Arduino-RTOS/blob/master/examples/> RTOS/RTOS_sync_read/RTOS_sync_read.ino)
 > 
 >   ### configuration
 >   - RTOS_sync_read.ino
