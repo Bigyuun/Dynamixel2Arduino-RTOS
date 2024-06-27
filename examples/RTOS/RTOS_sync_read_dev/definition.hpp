@@ -90,7 +90,7 @@ using namespace ControlTableItem;
 
 /** custom **/
 #define SYNC_MODE true  // if not use, modify to false
-
+c:\Users\daeyun\Desktop\github_repositories_Bigyuun\Dynamixel2Arduino-RTOS\examples\RTOS\RTOS_sync_read_legacy\definition.hpp
 #define MONITORING_MODE true
 #define DXL_ID_CNT 3
 #define DXL_BAUDRATE  57600
