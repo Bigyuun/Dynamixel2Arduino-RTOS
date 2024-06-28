@@ -92,8 +92,9 @@ using namespace ControlTableItem;
 #define SYNC_MODE true  // if not use, modify to false
 
 #define MONITORING_MODE true
-#define DXL_ID_CNT 3
+#define DXL_ID_CNT 2
 #define DXL_BAUDRATE  57600
+// #define DXL_BAUDRATE  57600
 #define BROADCAST_ID  254
 #define DYNAMIXEL_PROTOCOL_VERSION 2.0
 #define OP_MODE   OP_EXTENDED_POSITION

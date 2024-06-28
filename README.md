@@ -42,7 +42,9 @@ You can publish the command with arguments as string, and subscribe the motor st
 - **Serial Read**
 
   MCU(OpenRB-150) receive the protocol by serial-communication
+
   - Normal mode & Sync mode are the same
+  - You can send command one by one, or send tehm all at once(syncWrite()).
 
 
 # Code
@@ -61,13 +63,29 @@ You can publish the command with arguments as string, and subscribe the motor st
 https://emanual.robotis.com/docs/en/parts/controller/openrb-150/
 ---
 
-### Sync mode
+### Sync mode & Fast Sync mode
 `Serial read` use Dynamixel2Arduino Master class member > function
 > 
 > ### Demo
-> 👉🏻 [code] (https://github.com/Bigyuun/Dynamixel2Arduino-RTOS/blob/master/examples/RTOS/RTOS_sync_read/RTOS_sync_read.ino)
+>
+> - **Sync mode (read)**
 > 
->   ### configuration
+>   👉🏻 [code] (https://github.com/Bigyuun/Dynamixel2Arduino-RTOS/blob/master/examples/RTOS/RTOS_sync_read/RTOS_sync_read.ino)
+> 
+> - **Fast Sync mode (read)**
+> 
+>   👉🏻 [code] (https://github.com/Bigyuun/Dynamixel2Arduino-RTOS/blob/master/examples/RTOS/RTOS_sync_read/RTOS_fast_sync_read.ino)
+>
+> - **Sync mode (read & write)**
+> 
+>   👉🏻 [code] (https://github.com/Bigyuun/Dynamixel2Arduino-RTOS/blob/master/examples/RTOS/RTOS_sync_read/RTOS_sync_read_write.ino)
+>
+> - **Fast Sync mode (read & write)**
+> 
+>   👉🏻 [code] (https://github.com/Bigyuun/Dynamixel2Arduino-RTOS/blob/master/examples/RTOS/RTOS_sync_read/RTOS_fast_sync_read_write.ino)
+> 
+> ### configuration
+> 
 >   - RTOS_sync_read.ino
 >   - definition.hpp
 >   - control_table.hpp
@@ -95,11 +113,26 @@ https://emanual.robotis.com/docs/en/parts/controller/openrb-150/
 
 - **Dynamixel2Arduino API**
     - For using ‘dxl.setOperatingMode(1, OP_POSITION)’
-    → /setOperatingMode,1,3;
+
+      → /setOperatingMode,1,3;
     
       ![Arduino Serial Monitor](./images/Untitled0.png)
 
+    - Sync Write Function
+
+      → /syncWrite,{target_name},{target_value_of_motor_#1},{target_value_of_motor_#2}, ... ; 
+
+      e.g. /syncWrite,poisition,1000,3000;
+
+    - Torque On & Off of all motors
+      
+      → /torqueOnAll;
+
+      → /torqueOffAll;
+
+
 - **Other custom function**
+
     - Monitoring as protocol
       
       If you want to see without protocol, you can send 

@@ -110,9 +110,20 @@ static void thread_serial_read( void *pvParameters )
     if (SERIAL.available() <= 0) {
       continue;
     }
-    // received messages update
-    String msg = SERIAL.readString();
 
+    String msg = "";
+    while (SERIAL.available() > 0) {
+      char c = SERIAL.read();
+      if (c == '\n' || c == '\r') {
+        break;
+      }
+      msg += c;
+    }
+
+    // received messages update
+    // String msg = SERIAL.readString();
+    SERIAL.print("recv msg: ");
+    SERIAL.println(msg);
     std::vector<String> v_command;
     bool success = parsing_command(msg, v_command);
     if (!success)
@@ -160,9 +171,14 @@ static void thread_serial_write( void *pvParameters )
   
   TickType_t lastWakeTime = xTaskGetTickCount();
   
-  uint8_t recv_cnt_te = dxl.syncRead(&sr_infos_torque_enable);
-  uint8_t recv_cnt_m = dxl.syncRead(&sr_infos_moving);
-  uint8_t recv_cnt_cvp = dxl.syncRead(&sr_infos_present_cvp);
+  // uint8_t recv_cnt_te = dxl.syncRead(&sr_infos_torque_enable);
+  // uint8_t recv_cnt_m = dxl.syncRead(&sr_infos_moving);
+  // uint8_t recv_cnt_cvp = dxl.syncRead(&sr_infos_present_cvp);
+
+  uint8_t recv_cnt_te = 0;
+  uint8_t recv_cnt_m = 0;
+  uint8_t recv_cnt_cvp = 0;
+
 
   uint8_t torque_enable[DXL_ID_CNT];
   uint8_t moving[DXL_ID_CNT] ;
@@ -177,9 +193,12 @@ static void thread_serial_write( void *pvParameters )
 
     DelayMsUntil(&lastWakeTime, 1000/SERIAL_WRITE_FREQUENCY);
 
-    recv_cnt_te = dxl.syncRead(&sr_infos_torque_enable);
-    recv_cnt_m = dxl.syncRead(&sr_infos_moving);
-    recv_cnt_cvp = dxl.syncRead(&sr_infos_present_cvp);
+    recv_cnt_te = dxl.fastSyncRead(&sr_infos_torque_enable);
+    recv_cnt_m = dxl.fastSyncRead(&sr_infos_moving);
+    recv_cnt_cvp = dxl.fastSyncRead(&sr_infos_present_cvp);
+    // recv_cnt_te = dxl.syncRead(&sr_infos_torque_enable);
+    // recv_cnt_m = dxl.syncRead(&sr_infos_moving);
+    // recv_cnt_cvp = dxl.syncRead(&sr_infos_present_cvp);
 
     if(recv_cnt_te > 0) {
       for(uint8_t i = 0; i < recv_cnt_te; i++) {

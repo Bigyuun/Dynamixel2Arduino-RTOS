@@ -157,6 +157,12 @@ typedef struct SyncReadHardwareErrorData{
   int8_t hardware_error;
 } __attribute__((packed)) SyncReadErrorCodenData_t;
 
+////////////////////////////////////////////////////////////////////
+typedef struct SyncWriteData {
+  int16_t goal_current;
+  int32_t goal_velocity;
+  int32_t goal_position;
+} __attribute__((packed)) SyncWriteData_t;
 
 // TEST
 typedef struct sr_data{
@@ -168,7 +174,6 @@ typedef struct sr_data{
 // typedef struct sw_data{
 //   int32_t goal_velocity;
 // } __attribute__((packed)) sw_data_t;
-
 
 
 

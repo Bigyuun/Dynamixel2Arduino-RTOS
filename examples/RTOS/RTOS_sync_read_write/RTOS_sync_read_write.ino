@@ -89,6 +89,26 @@ uint8_t user_pkt_buf_present_cvp[user_pkt_buf_cap];
 DYNAMIXEL::InfoSyncReadInst_t sr_infos_present_cvp;
 DYNAMIXEL::XELInfoSyncRead_t info_xels_sr_present_cvp[DXL_ID_CNT];
 
+/**
+* @author DY
+* @note
+    Declare each structures for write multi-data
+    In this case,
+      - torque_enable
+      - goal_current
+      - goal_velocity
+      - goal_position
+*/
+SyncWriteData_t sw_data[DXL_ID_CNT];
+DYNAMIXEL::InfoSyncWriteInst_t sw_infos_goal_current;
+DYNAMIXEL::XELInfoSyncWrite_t info_xels_sw_goal_current[DXL_ID_CNT];
+DYNAMIXEL::InfoSyncWriteInst_t sw_infos_goal_velocity;
+DYNAMIXEL::XELInfoSyncWrite_t info_xels_sw_goal_velocity[DXL_ID_CNT];
+DYNAMIXEL::InfoSyncWriteInst_t sw_infos_goal_position;
+DYNAMIXEL::XELInfoSyncWrite_t info_xels_sw_goal_position[DXL_ID_CNT];
+
+
+
 // RTOS handler
 TaskHandle_t Handle_aTask;
 TaskHandle_t Handle_serialreadTask;
@@ -193,9 +213,9 @@ static void thread_serial_write( void *pvParameters )
 
     DelayMsUntil(&lastWakeTime, 1000/SERIAL_WRITE_FREQUENCY);
 
-    recv_cnt_te = dxl.fastSyncRead(&sr_infos_torque_enable);
-    recv_cnt_m = dxl.fastSyncRead(&sr_infos_moving);
-    recv_cnt_cvp = dxl.fastSyncRead(&sr_infos_present_cvp);
+    recv_cnt_te = dxl.syncRead(&sr_infos_torque_enable);
+    recv_cnt_m = dxl.syncRead(&sr_infos_moving);
+    recv_cnt_cvp = dxl.syncRead(&sr_infos_present_cvp);
 
     if(recv_cnt_te > 0) {
       for(uint8_t i = 0; i < recv_cnt_te; i++) {
@@ -398,6 +418,9 @@ void dynamixel_init()
     DXL_ID_LIST[i] = i + 1;
   }
 
+  // ================================================================================================
+  // >> Sync Read 
+  // ================================================================================================
   // torque_enable =============================================
   sr_infos_torque_enable.packet.p_buf = user_pkt_buf_torque_enable;
   sr_infos_torque_enable.packet.buf_capacity = user_pkt_buf_cap;
@@ -442,6 +465,52 @@ void dynamixel_init()
     sr_infos_present_cvp.xel_count++;
   }
   sr_infos_present_cvp.is_info_changed = true;
+
+  // ================================================================================================
+  // >> Sync Write 
+  // ================================================================================================
+  // goal cur & vel & pos
+  sw_infos_goal_current.packet.p_buf = nullptr;
+  sw_infos_goal_current.packet.is_completed = false;
+  sw_infos_goal_current.addr = ADDR_GOAL_CURRENT;
+  sw_infos_goal_current.addr_length = ADDR_LEN_GOAL_CURRENT;
+  sw_infos_goal_current.p_xels = info_xels_sw_goal_current;
+  sw_infos_goal_current.xel_count = 0;
+
+  for(int i=0; i<DXL_ID_CNT; i++){
+    info_xels_sw_goal_current[i].id = DXL_ID_LIST[i];
+    info_xels_sw_goal_current[i].p_data = (uint8_t*)&sw_data[i].goal_current;
+    sw_infos_goal_current.xel_count++;
+  }
+  sw_infos_goal_current.is_info_changed = true;
+
+  sw_infos_goal_velocity.packet.p_buf = nullptr;
+  sw_infos_goal_velocity.packet.is_completed = false;
+  sw_infos_goal_velocity.addr = ADDR_GOAL_VELOCITY;
+  sw_infos_goal_velocity.addr_length = ADDR_LEN_GOAL_VELOCITY;
+  sw_infos_goal_velocity.p_xels = info_xels_sw_goal_velocity;
+  sw_infos_goal_velocity.xel_count = 0;
+
+  for(int i=0; i<DXL_ID_CNT; i++){
+    info_xels_sw_goal_velocity[i].id = DXL_ID_LIST[i];
+    info_xels_sw_goal_velocity[i].p_data = (uint8_t*)&sw_data[i].goal_velocity;
+    sw_infos_goal_velocity.xel_count++;
+  }
+  sw_infos_goal_velocity.is_info_changed = true;
+
+  sw_infos_goal_position.packet.p_buf = nullptr;
+  sw_infos_goal_position.packet.is_completed = false;
+  sw_infos_goal_position.addr = ADDR_GOAL_POSITION;
+  sw_infos_goal_position.addr_length = ADDR_LEN_GOAL_POSITION;
+  sw_infos_goal_position.p_xels = info_xels_sw_goal_position;
+  sw_infos_goal_position.xel_count = 0;
+
+  for(int i=0; i<DXL_ID_CNT; i++){
+    info_xels_sw_goal_position[i].id = DXL_ID_LIST[i];
+    info_xels_sw_goal_position[i].p_data = (uint8_t*)&sw_data[i].goal_position;
+    sw_infos_goal_position.xel_count++;
+  }
+  sw_infos_goal_position.is_info_changed = true;
 
   SERIAL.println("Dynamixel initilaizing... OK");
 }
@@ -969,6 +1038,93 @@ bool dynamixel_function_callback(std::vector<String> v_command)
       {
         uint8_t num_arg = v_command.size() - 1;
         if (num_arg == 3) { dxl.writeControlTableItem(v_command[1].toInt(), v_command[2].toInt(), v_command[3].toInt()); return true; }
+        else return false;
+      }(len);
+      SERIAL.println(success);
+      break;
+
+    // sync write
+    case HashCode("syncWrite"):
+      /**
+      * @brief Check the exmaple or documents
+      * @protocol /syncWrite,ADDRESS_NAME,target_value_motor_1,target_value_motor_2, ... ;
+      * @example Set velocity of motor 1: 10, motor 2: 50
+      *          -> /syncWrite,velocity,10,50;
+      */
+      SERIAL.print("syncWrite() -> success: ");
+
+      // Lambda Function: Check the number of arguments & implement
+      success = [v_command](uint8_t len) -> bool
+      {
+        // protecting overflow
+        uint8_t num_arg = v_command.size() - 2;
+        if (num_arg != DXL_ID_CNT) { SERIAL.print("number of arguments=");
+          SERIAL.print(num_arg);
+          SERIAL.print(" does not match with DXL_ID_CNT=");
+          SERIAL.println(DXL_ID_CNT);
+          return false; 
+        }
+
+        String target_name = v_command[1];
+        if (target_name == "current") {
+          SERIAL.println(target_name);
+          for (int i=0; i<DXL_ID_CNT; i++) {
+            sw_data[i].goal_current = v_command[2+i].toFloat();
+            SERIAL.println(sw_data[i].goal_current);
+          }
+          sw_infos_goal_current.is_info_changed = true;
+          dxl.syncWrite(&sw_infos_goal_current);
+        }
+        else if (target_name == "velocity") {
+          SERIAL.println(target_name);
+          for (int i=0; i<DXL_ID_CNT; i++) {
+            sw_data[i].goal_velocity = v_command[2+i].toInt();
+            SERIAL.println(sw_data[i].goal_velocity);
+          }
+          sw_infos_goal_velocity.is_info_changed = true;
+          dxl.syncWrite(&sw_infos_goal_velocity);
+        }
+        else if (target_name == "position") {
+          SERIAL.println(target_name);
+          for (int i=0; i<DXL_ID_CNT; i++) {
+            sw_data[i].goal_position = v_command[2+i].toInt();
+            SERIAL.println(sw_data[i].goal_position);
+          }
+          sw_infos_goal_position.is_info_changed = true;
+          dxl.syncWrite(&sw_infos_goal_position);
+        }
+        return true;
+      }(len);
+      SERIAL.println(success);
+      break;
+
+    case HashCode("torqueOnAll"):
+      /**
+        * @example
+        */
+      SERIAL.print("torqueOnAll() -> success: ");
+
+      // Lambda Function: Check the number of arguments & implement
+      success = [v_command](uint8_t len) -> bool
+      {
+        uint8_t num_arg = v_command.size() - 1;
+        if (num_arg == 0) { dxl.torqueOn(BROADCAST_ID); return true; }
+        else return false;
+      }(len);
+      SERIAL.println(success);
+      break;
+
+    case HashCode("torqueOffAll"):
+      /**
+        * @example
+        */
+      SERIAL.print("torqueOffAll() -> success: ");
+
+      // Lambda Function: Check the number of arguments & implement
+      success = [v_command](uint8_t len) -> bool
+      {
+        uint8_t num_arg = v_command.size() - 1;
+        if (num_arg == 0) { dxl.torqueOff(BROADCAST_ID); return true; }
         else return false;
       }(len);
       SERIAL.println(success);
