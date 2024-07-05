@@ -85,6 +85,20 @@ DYNAMIXEL::InfoSyncReadInst_t sr_infos_moving;
 DYNAMIXEL::XELInfoSyncRead_t info_xels_sr_moving[DXL_ID_CNT];
 
 // For reading cur & vel & pos because its addresses are side by side
+uint8_t user_pkt_buf_present_c[user_pkt_buf_cap];
+DYNAMIXEL::InfoSyncReadInst_t sr_infos_present_c;
+DYNAMIXEL::XELInfoSyncRead_t info_xels_sr_present_c[DXL_ID_CNT];
+// For reading cur & vel & pos because its addresses are side by side
+uint8_t user_pkt_buf_present_v[user_pkt_buf_cap];
+DYNAMIXEL::InfoSyncReadInst_t sr_infos_present_v;
+DYNAMIXEL::XELInfoSyncRead_t info_xels_sr_present_v[DXL_ID_CNT];
+// For reading cur & vel & pos because its addresses are side by side
+uint8_t user_pkt_buf_present_p[user_pkt_buf_cap];
+DYNAMIXEL::InfoSyncReadInst_t sr_infos_present_p;
+DYNAMIXEL::XELInfoSyncRead_t info_xels_sr_present_p[DXL_ID_CNT];
+
+
+// For reading cur & vel & pos because its addresses are side by side
 uint8_t user_pkt_buf_present_cvp[user_pkt_buf_cap];
 DYNAMIXEL::InfoSyncReadInst_t sr_infos_present_cvp;
 DYNAMIXEL::XELInfoSyncRead_t info_xels_sr_present_cvp[DXL_ID_CNT];
@@ -197,6 +211,9 @@ static void thread_serial_write( void *pvParameters )
 
   uint8_t recv_cnt_te = 0;
   uint8_t recv_cnt_m = 0;
+  uint8_t recv_cnt_c = 0;
+  uint8_t recv_cnt_v = 0;
+  uint8_t recv_cnt_p = 0;
   uint8_t recv_cnt_cvp = 0;
 
 
@@ -215,7 +232,10 @@ static void thread_serial_write( void *pvParameters )
 
     recv_cnt_te = dxl.fastSyncRead(&sr_infos_torque_enable);
     recv_cnt_m = dxl.fastSyncRead(&sr_infos_moving);
-    recv_cnt_cvp = dxl.fastSyncRead(&sr_infos_present_cvp);
+    recv_cnt_c = dxl.fastSyncRead(&sr_infos_present_c);
+    recv_cnt_v = dxl.fastSyncRead(&sr_infos_present_v);
+    recv_cnt_p = dxl.fastSyncRead(&sr_infos_present_p);
+    // recv_cnt_cvp = dxl.fastSyncRead(&sr_infos_present_cvp);
 
     if(recv_cnt_te > 0) {
       for(uint8_t i = 0; i < recv_cnt_te; i++) {
@@ -235,16 +255,40 @@ static void thread_serial_write( void *pvParameters )
       SERIAL.println(dxl.getLastLibErrCode());
     }
 
-    if(recv_cnt_cvp > 0) {
-      for(uint8_t i = 0; i < recv_cnt_cvp; i++) {
+    if(recv_cnt_c > 0) {
+      for(uint8_t i = 0; i < recv_cnt_c; i++) {
         present_cur[i] = sr_data[i].present_current;
+      }
+    } else {
+      SERIAL.print("SyncRead Current Fail, Lib error code: ");
+      SERIAL.println(dxl.getLastLibErrCode());
+    }
+    if(recv_cnt_v > 0) {
+      for(uint8_t i = 0; i < recv_cnt_v; i++) {
         present_vel[i] = sr_data[i].present_velocity;
+      }
+    } else {
+      SERIAL.print("SyncRead Velocity Fail, Lib error code: ");
+      SERIAL.println(dxl.getLastLibErrCode());
+    }
+    if(recv_cnt_p > 0) {
+      for(uint8_t i = 0; i < recv_cnt_p; i++) {
         present_pos[i] = sr_data[i].present_position;
       }
     } else {
-      SERIAL.print("SyncRead Current & Velocity & Position Fail, Lib error code: ");
+      SERIAL.print("SyncRead Position Fail, Lib error code: ");
       SERIAL.println(dxl.getLastLibErrCode());
     }
+    // if(recv_cnt_cvp > 0) {
+    //   for(uint8_t i = 0; i < recv_cnt_cvp; i++) {
+    //     present_cur[i] = sr_data[i].present_current;
+    //     present_vel[i] = sr_data[i].present_velocity;
+    //     present_pos[i] = sr_data[i].present_position;
+    //   }
+    // } else {
+    //   SERIAL.print("SyncRead Current & Velocity & Position Fail, Lib error code: ");
+    //   SERIAL.println(dxl.getLastLibErrCode());
+    // }
 
     if (monitoring_flag) {
       for(int i=0; i<DXL_ID_CNT; i++){
@@ -450,6 +494,52 @@ void dynamixel_init()
     sr_infos_moving.xel_count++;
   }
   sr_infos_moving.is_info_changed = true;
+
+
+  // present_cur =============================================
+  sr_infos_present_c.packet.p_buf = user_pkt_buf_present_c;
+  sr_infos_present_c.packet.buf_capacity = user_pkt_buf_cap;
+  sr_infos_present_c.packet.is_completed = false;
+  sr_infos_present_c.addr = ADDR_PRESENT_CURRENT;
+  sr_infos_present_c.addr_length = ADDR_LEN_PRESENT_CURRENT;
+  sr_infos_present_c.p_xels = info_xels_sr_present_c;
+  sr_infos_present_c.xel_count = 0;  
+  for(int i=0; i<DXL_ID_CNT; i++){
+    info_xels_sr_present_c[i].id = DXL_ID_LIST[i];
+    info_xels_sr_present_c[i].p_recv_buf = (uint8_t*)&sr_data[i].present_current;
+    sr_infos_present_c.xel_count++;
+  }
+  sr_infos_present_c.is_info_changed = true;
+  // present_vel =============================================
+  sr_infos_present_v.packet.p_buf = user_pkt_buf_present_v;
+  sr_infos_present_v.packet.buf_capacity = user_pkt_buf_cap;
+  sr_infos_present_v.packet.is_completed = false;
+  sr_infos_present_v.addr = ADDR_PRESENT_VELOCITY;
+  sr_infos_present_v.addr_length =  ADDR_LEN_PRESENT_VELOCITY;
+  sr_infos_present_v.p_xels = info_xels_sr_present_v;
+  sr_infos_present_v.xel_count = 0;  
+  for(int i=0; i<DXL_ID_CNT; i++){
+    info_xels_sr_present_v[i].id = DXL_ID_LIST[i];
+    info_xels_sr_present_v[i].p_recv_buf = (uint8_t*)&sr_data[i].present_velocity;
+    sr_infos_present_v.xel_count++;
+  }
+  sr_infos_present_v.is_info_changed = true;
+  // present_pos =============================================
+  sr_infos_present_p.packet.p_buf = user_pkt_buf_present_p;
+  sr_infos_present_p.packet.buf_capacity = user_pkt_buf_cap;
+  sr_infos_present_p.packet.is_completed = false;
+  sr_infos_present_p.addr = ADDR_PRESENT_POSITION;
+  sr_infos_present_p.addr_length = ADDR_LEN_PRESENT_POSITION;
+  sr_infos_present_p.p_xels = info_xels_sr_present_p;
+  sr_infos_present_p.xel_count = 0;  
+  for(int i=0; i<DXL_ID_CNT; i++){
+    info_xels_sr_present_p[i].id = DXL_ID_LIST[i];
+    info_xels_sr_present_p[i].p_recv_buf = (uint8_t*)&sr_data[i].present_position;
+    sr_infos_present_p.xel_count++;
+  }
+  sr_infos_present_p.is_info_changed = true;
+
+
 
   // present_cur & vel & pos =============================================
   sr_infos_present_cvp.packet.p_buf = user_pkt_buf_present_cvp;

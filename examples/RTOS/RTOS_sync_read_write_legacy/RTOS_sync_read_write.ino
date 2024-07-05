@@ -43,7 +43,7 @@
 
 /** custom **/
 #include "definition.hpp"
-#include "motor_api.hpp"
+
 //**************************************************************************
 // global variables
 //**************************************************************************
@@ -54,7 +54,12 @@ bool monitoring_flag = true;
 Dynamixel2Arduino dxl(DXL_SERIAL, DXL_DIR_PIN);
 uint8_t g_num_of_motors = 0;
 uint8_t DXL_ID_LIST[DXL_ID_CNT];
-uint8_t HOMING_SENSOR_LIST[DXL_ID_CNT]; // D0, D1, ... same as DXL_ID_LIST
+
+// int8_t g_torque_enable[DXL_ID_CNT];
+// int8_t g_moving[DXL_ID_CNT];
+// int16_t g_present_current[DXL_ID_CNT];
+// int32_t g_present_velocity[DXL_ID_CNT];
+// int32_t g_present_position[DXL_ID_CNT];
 
 /**
 * @author DY
@@ -70,10 +75,6 @@ uint8_t HOMING_SENSOR_LIST[DXL_ID_CNT]; // D0, D1, ... same as DXL_ID_LIST
 */
 SyncReadData_t sr_data[DXL_ID_CNT];
 const uint16_t user_pkt_buf_cap = 128;
-
-uint8_t user_pkt_buf_operation_mode[user_pkt_buf_cap];
-DYNAMIXEL::InfoSyncReadInst_t sr_infos_operation_mode;
-DYNAMIXEL::XELInfoSyncRead_t info_xels_sr_operation_mode[DXL_ID_CNT];
 
 uint8_t user_pkt_buf_torque_enable[user_pkt_buf_cap];
 DYNAMIXEL::InfoSyncReadInst_t sr_infos_torque_enable;
@@ -106,29 +107,14 @@ DYNAMIXEL::XELInfoSyncWrite_t info_xels_sw_goal_velocity[DXL_ID_CNT];
 DYNAMIXEL::InfoSyncWriteInst_t sw_infos_goal_position;
 DYNAMIXEL::XELInfoSyncWrite_t info_xels_sw_goal_position[DXL_ID_CNT];
 
-OpMode op_mode = kStop;
-uint32_t homing_offset[DXL_ID_CNT];
-uint8_t operation_mode[DXL_ID_CNT];
-uint8_t torque_enable[DXL_ID_CNT];
-uint8_t moving[DXL_ID_CNT] ;
-float present_cur[DXL_ID_CNT];
-float present_vel[DXL_ID_CNT];
-float present_pos[DXL_ID_CNT];
-int limit_sensor_signal[DXL_ID_CNT];
-
-// Synchronize DXL Read & Serial Write 
-//When dxl read is done, serial write node will be work.
-bool state_write_signal = false;
-
 // RTOS handler
 TaskHandle_t Handle_aTask;
 TaskHandle_t Handle_serialreadTask;
 TaskHandle_t Handle_serialwriteTask;
 TaskHandle_t Handle_DynamixelTask;
-TaskHandle_t Handle_DynamixelIOTask;
 
 // synchronizing Mutex
-SemaphoreHandle_t mutex;
+SemaphoreHandle_t serial_mutex;
 
 /**
 * @author DY
@@ -151,7 +137,7 @@ static void thread_serial_read( void *pvParameters )
       }
       msg += c;
     }
-    
+
     // received messages update
     // String msg = SERIAL.readString();
     SERIAL.print("recv msg: ");
@@ -161,25 +147,34 @@ static void thread_serial_read( void *pvParameters )
     if (!success)
       continue;
 
-    // xSemaphoreTake(mutex, 100 / portTICK_PERIOD_MS);
+    // xSemaphoreTake(serial_mutex, 100 / portTICK_PERIOD_MS);
 
     if (v_command[0] == "monitorOn") monitoring_flag = true;
     else if (v_command[0] == "monitorOff")  monitoring_flag = false;
     else if (v_command[0] == "task") print_task_info();
     else {
+      dynamixel_function_callback(v_command);
+    }
 
-      /**
-      * @brief Serial command must operate, so use portMAX_DELAY for waiting infinite.
-      */
-      // xSemaphoreTake(mutex, 100 / portTICK_PERIOD_MS);
-      if(xSemaphoreTake(mutex, portMAX_DELAY) == pdTRUE) {
-        dynamixel_function_callback(v_command);
-        xSemaphoreGive(mutex);
+    // xSemaphoreTake(serial_mutex, 100 / portTICK_PERIOD_MS);
+    SERIAL.print("[Thread-Serial READ] Command: [size]: ");
+    SERIAL.print(v_command.size());
+    SERIAL.print(" / [value]: ");
+    if (success) {
+      for (int i = 0; i < v_command.size(); i++) {
+        Serial.print(v_command[i]);
+        Serial.print(" ");
       }
+      Serial.println();
+    } else {
+      Serial.println("Error parsing and storing values!");
     }
     SERIAL.flush();
-    vTaskDelay( 10 / portTICK_PERIOD_MS ); // Never delete
+    // xSemaphoreGive(serial_mutex);
+
+    vTaskDelay( 1 / portTICK_PERIOD_MS ); // Never delete
   }
+
   SERIAL.println("*** [Thread-Serial READ] THREAD DELETE");
 }
 
@@ -194,76 +189,112 @@ static void thread_serial_write( void *pvParameters )
   
   TickType_t lastWakeTime = xTaskGetTickCount();
   
-  while(true){
+  // uint8_t recv_cnt_te = dxl.syncRead(&sr_infos_torque_enable);
+  // uint8_t recv_cnt_m = dxl.syncRead(&sr_infos_moving);
+  // uint8_t recv_cnt_cvp = dxl.syncRead(&sr_infos_present_cvp);
+
+  uint8_t recv_cnt_te = 0;
+  uint8_t recv_cnt_m = 0;
+  uint8_t recv_cnt_cvp = 0;
+
+
+  uint8_t torque_enable[DXL_ID_CNT];
+  uint8_t moving[DXL_ID_CNT] ;
+  float present_cur[DXL_ID_CNT];
+  float present_vel[DXL_ID_CNT];
+  float present_pos[DXL_ID_CNT];
+
+  // TEST
+  // uint8_t recv_cnt = dxl.syncRead(&sr_infos);
+
+  while(1){
 
     DelayMsUntil(&lastWakeTime, 1000/SERIAL_WRITE_FREQUENCY);
-    xSemaphoreTake(mutex, 100 / portTICK_PERIOD_MS);
-    if (state_write_signal) {
-      if (monitoring_flag) {
-        for(int i=0; i<DXL_ID_CNT; i++){
-          SERIAL.print("ID: ");
-          SERIAL.print(i + 1);
-          SERIAL.print(", Operation Mode: ");
-          SERIAL.print(operation_mode[i]);
-          SERIAL.print(", Torque Enable: ");
-          SERIAL.print(torque_enable[i]);
-          SERIAL.print(", Moving: ");
-          SERIAL.print(moving[i]);
-          SERIAL.print(", Cur: ");
-          SERIAL.print(present_cur[i]);
-          SERIAL.print(", Vel: ");
-          SERIAL.print(present_vel[i]);
-          SERIAL.print(", Pos: ");
-          SERIAL.print(present_pos[i]);
-          SERIAL.print(", LS_signal: ");
-          SERIAL.print(limit_sensor_signal[i]);
-          SERIAL.println();
-        }
+
+    recv_cnt_te = dxl.syncRead(&sr_infos_torque_enable);
+    recv_cnt_m = dxl.syncRead(&sr_infos_moving);
+    recv_cnt_cvp = dxl.syncRead(&sr_infos_present_cvp);
+
+    if(recv_cnt_te > 0) {
+      for(uint8_t i = 0; i < recv_cnt_te; i++) {
+        torque_enable[i] = sr_data[i].torque_enable;
       }
-      else {
-        for(int i=0; i<DXL_ID_CNT; i++){
-          char msg[50];
-          sprintf(msg, "/%d,%d,%d,%d,%f,%f,%f,%d;", i+1, operation_mode[i], torque_enable[i], moving[i], present_cur[i], present_vel[i], present_pos[i], limit_sensor_signal[i]);
-          SERIAL.println(msg);
-          SERIAL.flush();
-        }
-      }
-      state_write_signal = false;
+    } else {
+      SERIAL.print("SyncRead Torque Enable Fail, Lib error code: ");
+      SERIAL.println(dxl.getLastLibErrCode());
     }
-    xSemaphoreGive(mutex);
-    vTaskDelay( 1 / portTICK_PERIOD_MS ); // Never delete
+
+    if(recv_cnt_m > 0) {
+      for(uint8_t i = 0; i < recv_cnt_m; i++) {
+        moving[i] = sr_data[i].moving;
+      }
+    } else {
+      SERIAL.print("SyncRead moving Fail, Lib error code: ");
+      SERIAL.println(dxl.getLastLibErrCode());
+    }
+
+    if(recv_cnt_cvp > 0) {
+      for(uint8_t i = 0; i < recv_cnt_cvp; i++) {
+        present_cur[i] = sr_data[i].present_current;
+        present_vel[i] = sr_data[i].present_velocity;
+        present_pos[i] = sr_data[i].present_position;
+      }
+    } else {
+      SERIAL.print("SyncRead Current & Velocity & Position Fail, Lib error code: ");
+      SERIAL.println(dxl.getLastLibErrCode());
+    }
+
+    if (monitoring_flag) {
+      for(int i=0; i<DXL_ID_CNT; i++){
+        // xSemaphoreTake(serial_mutex, portMAX_DELAY);
+        // xSemaphoreTake(serial_mutex, 100 / portTICK_PERIOD_MS);
+        SERIAL.print("ID: ");
+        SERIAL.print(i + 1);
+        SERIAL.print(", Torque Enable: ");
+        SERIAL.print(torque_enable[i]);
+        SERIAL.print(", Moving: ");
+        SERIAL.print(moving[i]);
+        SERIAL.print(", Cur: ");
+        SERIAL.print(present_cur[i]);
+        SERIAL.print(", Vel: ");
+        SERIAL.print(present_vel[i]);
+        SERIAL.print(", Pos: ");
+        SERIAL.print(present_pos[i]);
+        SERIAL.println();
+        // xSemaphoreGive(serial_mutex);
+      }
+    }
+    else {
+      for(int i=0; i<DXL_ID_CNT; i++){
+        char msg[50];
+        sprintf(msg, "/%d,%d,%d,%f,%f,%f;", i+1, torque_enable[i], moving[i], present_cur[i], present_vel[i], present_pos[i]);
+        // xSemaphoreTake(serial_mutex, portMAX_DELAY);
+        SERIAL.println(msg);
+        SERIAL.flush();
+        // xSemaphoreGive(serial_mutex);
+      }
+      
+    }
+  
+    vTaskDelay( 5 / portTICK_PERIOD_MS ); // Never delete
   }
   SERIAL.println("*** [Thread-Serial Write] THREAD DELETE");
 }
 
-
 static void thread_Dynamixel_node( void *pvParameters ) 
 {
   SERIAL.println("Dynamixel node is up.");
-
   while(true){
-    if (xSemaphoreTake(mutex, 100 / portTICK_PERIOD_MS) == pdTRUE) {
-      dxl_state_read();
-      xSemaphoreGive(mutex);
-    }
-    
-    if (op_mode == kHoming) {
-      homing();
-    }
-    
-    vTaskDelay( 1 / portTICK_PERIOD_MS );
-  }
-  SERIAL.println("*** [Thread-Dynamixel] THREAD DELETE");
-}
-
-static void thread_Dynamixel_io_node( void *pvParameters ) 
-{
-  SERIAL.println("Dynamixel I/O node is up.");
-  while(true){
-    for (int i=0; i<DXL_ID_CNT; i++) {
-      limit_sensor_signal[i] = digitalRead(HOMING_SENSOR_LIST[i]);
-    }
-    vTaskDelay( 1 / portTICK_PERIOD_MS );
+    /** 
+      * write the code
+      */
+      SERIAL.println("Dynamixel_node");
+    // xSemaphoreTake(seric:\Users\daeyun\Desktop\github_repositories_Bigyuun\Dynamixel2Arduino-RTOS\examples\RTOS\RTOS_sync_read_dev\definition.hppal_mutex, portMAX_DELAY);
+    // SERIAL.print("[Thread-Dynamixel State] Present Current(mA)= ");
+    // SERIAL.println(dxl.getPresentCurrent(DXL_ID, UNIT_MILLI_AMPERE));
+    // SERIAL.flush();
+    // xSemaphoreGive(serial_mutex);
+    vTaskDelay( 10 / portTICK_PERIOD_MS );
   }
   SERIAL.println("*** [Thread-Dynamixel] THREAD DELETE");
 }
@@ -283,8 +314,12 @@ void serial_init()
   // SERIAL.begin(57600);
   while(!SERIAL);
 
-  mutex = xSemaphoreCreateMutex();
-  if (mutex == NULL){
+  
+
+  // put your setup code here, to run once:
+  // For Uno, Nano, Mini, and Mega, use the UART port of the DYNAMIXEL Shield to read debugging messages.
+  serial_mutex = xSemaphoreCreateMutex();
+  if (serial_mutex == NULL){
     SERIAL.println("Mutex can not be created.");
   }
   else{
@@ -312,18 +347,19 @@ void serial_init()
 */
 void dynamixel_init()
 {
-  // set motor ID
-  for (int i=0; i<DXL_ID_CNT; i++) {
-    DXL_ID_LIST[i] = i + 1;
-  }
-
   bool success;
+  // Set Port baudrate to 57600bps. This has to match with DYNAMIXEL baudrate.
   dxl.begin(DXL_BAUDRATE);
-  dxl.setPortProtocolVersion(DYNAMIXEL_PROTOCOL_VERSION);
+
   SERIAL.print("DXL_BAUDRATE: ");
   SERIAL.println(DXL_BAUDRATE);
   SERIAL.print("DYNAMIXEL_PROTOCOL_VERSION: ");
   SERIAL.println(DYNAMIXEL_PROTOCOL_VERSION);
+  SERIAL.print("OPERATION_MODE: ");
+  SERIAL.println(OP_MODE);
+
+  // Set Port Protocol Version. This has to match with DYNAMIXEL protocol version.
+  if(!dxl.setPortProtocolVersion(DYNAMIXEL_PROTOCOL_VERSION)) SERIAL.println("setPortProtocolVersion() Fail.");
   
   //////////////////////////////////////////////////////////////////
   // Find motors
@@ -336,7 +372,7 @@ void dynamixel_init()
     if (success) {
       ids.push_back(i); 
       SERIAL.print(i);
-      SERIAL.print("  ");
+      SERIAL.print(" / ");
       g_num_of_motors++;
     }
   }
@@ -357,7 +393,11 @@ void dynamixel_init()
     // Get DYNAMIXEL information
     if(!dxl.ping(i)) SERIAL.println("ping() Fail.");  
     if(!dxl.setOperatingMode(i, OP_MODE)) SERIAL.println("setOperatingMode() Fail.");
+    
+    // Turn off torque when configuring items in EEPROM area
     if(!dxl.torqueOff(i)) SERIAL.println("torqueOff() Fail.");  
+    // if(!dxl.torqueOn(i)) SERIAL.println("torqueOn() Fail.");  
+
     // Set Position PID Gains
     if(!dxl.writeControlTableItem(POSITION_P_GAIN, i, DXL_POSITION_P_GAIN)) SERIAL.println("writeControlTableItem(POSITION_P_GAIN) Fail.");
     if(!dxl.writeControlTableItem(POSITION_I_GAIN, i, DXL_POSITION_I_GAIN)) SERIAL.println("writeControlTableItem(POSITION_I_GAIN) Fail.");
@@ -365,27 +405,19 @@ void dynamixel_init()
   }
   dxl.torqueOff(BROADCAST_ID);
 
+
   //////////////////////////////////////////////////////////////////
   // Fill the members of structure to syncRead using external user packet buffer
   //////////////////////////////////////////////////////////////////
+
+  // set motor ID
+  for (int i=0; i<DXL_ID_CNT; i++) {
+    DXL_ID_LIST[i] = i + 1;
+  }
+
   // ================================================================================================
   // >> Sync Read 
   // ================================================================================================
-  // operating mode =============================================
-  sr_infos_operation_mode.packet.p_buf = user_pkt_buf_operation_mode;
-  sr_infos_operation_mode.packet.buf_capacity = user_pkt_buf_cap;
-  sr_infos_operation_mode.packet.is_completed = false;
-  sr_infos_operation_mode.addr = ADDR_OPERATING_MODE;
-  sr_infos_operation_mode.addr_length = ADDR_LEN_OPERATING_MODE;
-  sr_infos_operation_mode.p_xels = info_xels_sr_operation_mode;
-  sr_infos_operation_mode.xel_count = 0;  
-  for(int i=0; i<DXL_ID_CNT; i++){
-    info_xels_sr_operation_mode[i].id = DXL_ID_LIST[i];
-    info_xels_sr_operation_mode[i].p_recv_buf = (uint8_t*)&sr_data[i].operation_mode;
-    sr_infos_operation_mode.xel_count++;
-  }
-  sr_infos_operation_mode.is_info_changed = true;
-
   // torque_enable =============================================
   sr_infos_torque_enable.packet.p_buf = user_pkt_buf_torque_enable;
   sr_infos_torque_enable.packet.buf_capacity = user_pkt_buf_cap;
@@ -481,92 +513,6 @@ void dynamixel_init()
 }
 
 /**
-* @author DY
-* @brief
-    - GPIO setting of OpenRB-150
-    - N digital input (photo interrupter as limit switch)
-    - 
-* @note
-*/
-void io_init()
-{
-  // put your setup code here, to run once:
-  SERIAL.println("I/O pins setup... ");
-  for (int i=0; i<DXL_ID_CNT; i++) {
-    // if use custom pin, modify this line
-    HOMING_SENSOR_LIST[i] = i+2;  // D2, D3, ...
-  }
-
-  for (int i=0; i<DXL_ID_CNT; i++) {
-    pinMode(HOMING_SENSOR_LIST[i], INPUT_PULLUP);
-    SERIAL.print("Limit Switch #");
-    SERIAL.print(i);
-    SERIAL.print(" is on D");
-    SERIAL.println(HOMING_SENSOR_LIST[i]);
-  }
-  SERIAL.println("  -- I/O pins setup OK");
-  delay(100);
-}
-
-/**
-* @author Bigyuun
-* @brief Read states of dynamixel motors
-*/
-void dxl_state_read(){
-  if (state_write_signal) return; //synchronize dxl read & serial write
-
-  uint8_t recv_cnt_operation_mode = 0;
-  uint8_t recv_cnt_te = 0;
-  uint8_t recv_cnt_m = 0;
-  uint8_t recv_cnt_cvp = 0;
-
-  recv_cnt_operation_mode = dxl.syncRead(&sr_infos_operation_mode);
-  recv_cnt_te = dxl.syncRead(&sr_infos_torque_enable);
-  recv_cnt_m = dxl.syncRead(&sr_infos_moving);
-  recv_cnt_cvp = dxl.syncRead(&sr_infos_present_cvp);
-
-  if(recv_cnt_operation_mode > 0) {
-    for(uint8_t i = 0; i < recv_cnt_operation_mode; i++) {
-      operation_mode[i] = sr_data[i].operation_mode;
-    }
-  } else {
-    SERIAL.print("SyncRead Operation Mode Fail, Lib error code: ");
-    SERIAL.println(dxl.getLastLibErrCode());
-  }
-
-  if(recv_cnt_te > 0) {
-    for(uint8_t i = 0; i < recv_cnt_te; i++) {
-      torque_enable[i] = sr_data[i].torque_enable;
-    }
-  } else {
-    SERIAL.print("SyncRead Torque Enable Fail, Lib error code: ");
-    SERIAL.println(dxl.getLastLibErrCode());
-  }
-
-  if(recv_cnt_m > 0) {
-    for(uint8_t i = 0; i < recv_cnt_m; i++) {
-      moving[i] = sr_data[i].moving;
-    }
-  } else {
-    SERIAL.print("SyncRead moving Fail, Lib error code: ");
-    SERIAL.println(dxl.getLastLibErrCode());
-  }
-
-  if(recv_cnt_cvp > 0) {
-    for(uint8_t i = 0; i < recv_cnt_cvp; i++) {
-      present_cur[i] = sr_data[i].present_current;
-      present_vel[i] = sr_data[i].present_velocity;
-      present_pos[i] = sr_data[i].present_position;
-    }
-  } else {
-    SERIAL.print("SyncRead Current & Velocity & Position Fail, Lib error code: ");
-    SERIAL.println(dxl.getLastLibErrCode());
-  }
-  state_write_signal = true;
-}
-
-
-/**
 * @author Bigyuun
 * @brief parsing command and its arguments
 * @protocol /function_name,argument1,argument2,...;
@@ -605,7 +551,6 @@ bool parsing_command(String msg, std::vector<String> & command_vector)
   // error
   return false;
 }
-
 
 
 /**
@@ -647,17 +592,11 @@ bool dynamixel_function_callback(std::vector<String> v_command)
       success = [v_command](uint8_t len) -> bool
       {
         uint8_t num_arg = v_command.size() - 1;
-        if (num_arg == 1) {
-          SERIAL.print("begin() : ");
-          dxl.begin(v_command[1].toInt());
-          return true;
-        } else return false;
+        if (num_arg == 1) { dxl.begin(v_command[1].toInt()); return true; }
+        else return false;
       }(len);
-      if(success) {
-        SERIAL.println("Success");
-      } else {
-        SERIAL.println("Failed");
-      }
+      SERIAL.print("begin() -> success: ");
+      SERIAL.println(success);
       break;
       
     case HashCode("getPortBaud"):
@@ -669,83 +608,59 @@ bool dynamixel_function_callback(std::vector<String> v_command)
       success = [v_command](uint8_t len) -> bool
       {
         uint8_t num_arg = v_command.size() - 1;
-        if (num_arg == 0) {
-          SERIAL.print("getPortBaud() : ");
-          SERIAL.println(dxl.getPortBaud());
-          return true;
-        } else return false;
+        if (num_arg == 0) { dxl.getPortBaud(); return true; }
+        else return false;
       }(len);
-      if(success) {
-        SERIAL.println("Success");
-      } else {
-        SERIAL.println("Failed");
-      }
+      SERIAL.print("getPortBaud() -> success: ");
+      SERIAL.println(success);
       break;
 
     case HashCode("ping"):
       /**
         * @example  dxl.ping(1);
         */
+      SERIAL.print("ping()");
 
       // Lambda Function: Check the number of arguments & implement
       success = [v_command](uint8_t len) -> bool
       {
         uint8_t num_arg = v_command.size() - 1;
-        if (num_arg == 1) { 
-          SERIAL.print("ping() : ");
-          SERIAL.println(dxl.ping(v_command[1].toInt()));
-          return true; 
-        } else return false;
+        if (num_arg == 1) { dxl.ping(v_command[1].toInt()); return true; }
+        else return false;
       }(len);
-      if(success) {
-        SERIAL.println("Success");
-      } else {
-        SERIAL.println("Failed");
-      }
+      SERIAL.println(success);
       break;
       
     case HashCode("scan"):
       /**
         * @example dxl.scan();
         */
+      SERIAL.print("scan() -> success: ");
 
       // Lambda Function: Check the number of arguments & implement
       success = [v_command](uint8_t len) -> bool
       {
         uint8_t num_arg = v_command.size() - 1;
-        if (num_arg == 0) { 
-          SERIAL.print("scan() : ");
-          SERIAL.println(dxl.scan());
-          return true;
-        } else return false;
+        if (num_arg == 0) { dxl.scan(); return true; }
+        else return false;
       }(len);
-      if(success) {
-        SERIAL.println("Success");
-      } else {
-        SERIAL.println("Failed");
-      }
+      SERIAL.println(success);
       break;
       
     case HashCode("getModelNumber"):
       /**
         * @example dxl.getModelNumber(1)
         */
+      SERIAL.print("getModelNumber() -> success: ");
 
       // Lambda Function: Check the number of arguments & implement
       success = [v_command](uint8_t len) -> bool
       {
         uint8_t num_arg = v_command.size() - 1;
-        if (num_arg == 1) {
-          SERIAL.print("getModelNumber() : ");
-          SERIAL.println(dxl.getModelNumber(v_command[1].toInt()));
-          return true;
-        } else return false;
+        if (num_arg == 1) { dxl.getModelNumber(v_command[1].toInt()); return true; }
+        else return false;
       }(len);
-      if(success) {
-        SERIAL.println("Success");
-      } else {
-        SERIAL.println("Failed");
-      }
+      SERIAL.println(success);
       break;
       
     case HashCode("setID"):
@@ -754,22 +669,16 @@ bool dynamixel_function_callback(std::vector<String> v_command)
         * @param new_id : A new ID to assign to the DYNAMIXEL. Data type : unsigned int8
         * @example dxl.setID(1, 2);
         */
+      SERIAL.print("setID() -> success: ");
 
       // Lambda Function: Check the number of arguments & implement
       success = [v_command](uint8_t len) -> bool
       {
         uint8_t num_arg = v_command.size() - 1;
-        if (num_arg == 2) { 
-          SERIAL.print("setID() : ");
-          SERIAL.println(dxl.setID(v_command[1].toInt(), v_command[2].toInt()));
-          return true; 
-        } else return false;
+        if (num_arg == 2) { dxl.setID(v_command[1].toInt(), v_command[2].toInt()); return true; }
+        else return false;
       }(len);
-      if(success) {
-        SERIAL.println("Success");
-      } else {
-        SERIAL.println("Failed");
-      }
+      SERIAL.println(success);
       break;
       
     case HashCode("setProtocol"):
@@ -778,22 +687,16 @@ bool dynamixel_function_callback(std::vector<String> v_command)
         * @param  version : Protocol version to use. Data type : float
         * @example  dxl.setProtocol(1, 1.0);
         */
+      SERIAL.print("setProtocol() -> success: ");
 
       // Lambda Function: Check the number of arguments & implement
       success = [v_command](uint8_t len) -> bool
       {
         uint8_t num_arg = v_command.size() - 1;
-        if (num_arg == 2) {
-          SERIAL.print("setProtocol() : ");
-          SERIAL.println(dxl.setProtocol(v_command[1].toInt(), v_command[2].toInt()));
-          return true;
-        } else return false;
+        if (num_arg == 2) { dxl.setProtocol(v_command[1].toInt(), v_command[2].toInt()); return true; }
+        else return false;
       }(len);
-      if(success) {
-        SERIAL.println("Success");
-      } else {
-        SERIAL.println("Failed");
-      }
+      SERIAL.println(success);
       break;
       
     case HashCode("setBaudrate"):
@@ -802,22 +705,16 @@ bool dynamixel_function_callback(std::vector<String> v_command)
         * @param  baudrate : Communication speed(baudrate) to use. Data type : unsigned int32
         * @example  dxl.setBaudrate(1, 57600);
         */
+      SERIAL.print("setBaudrate() -> success: ");
 
       // Lambda Function: Check the number of arguments & implement
       success = [v_command](uint8_t len) -> bool
       {
         uint8_t num_arg = v_command.size() - 1;
-        if (num_arg == 2) {
-          SERIAL.print("setBaudrate() : ");
-          SERIAL.println(dxl.setBaudrate(v_command[1].toInt(), v_command[2].toInt()));
-          return true;
-        } else return false;
+        if (num_arg == 2) { dxl.setBaudrate(v_command[1].toInt(), v_command[2].toInt()); return true; }
+        else return false;
       }(len);
-      if(success) {
-        SERIAL.println("Success");
-      } else {
-        SERIAL.println("Failed");
-      }
+      SERIAL.println(success);
       break;
       
     case HashCode("torqueOn"):
@@ -825,22 +722,16 @@ bool dynamixel_function_callback(std::vector<String> v_command)
         * @param  id : ID of a specific DYNAMIXEL. Data type : unsigned int8
         * @example  dxl.torqueOn(1);
         */
+      SERIAL.print("torqueOn() -> success: ");
 
       // Lambda Function: Check the number of arguments & implement
       success = [v_command](uint8_t len) -> bool
       {
         uint8_t num_arg = v_command.size() - 1;
-        if (num_arg == 1) {
-          SERIAL.print("torqueOn() : ");
-          SERIAL.println(dxl.torqueOn(v_command[1].toInt()));
-          return true;
-        } else return false;
+        if (num_arg == 1) { dxl.torqueOn(v_command[1].toInt()); return true; }
+        else return false;
       }(len);
-      if(success) {
-        SERIAL.println("Success");
-      } else {
-        SERIAL.println("Failed");
-      }
+      SERIAL.println(success);
       break;
       
     case HashCode("torqueOff"):
@@ -848,22 +739,16 @@ bool dynamixel_function_callback(std::vector<String> v_command)
         * @param  id : ID of a specific DYNAMIXEL. Data type : unsigned int8
         * @example  dxl.torqueOff(1);
         */
+      SERIAL.print("torqueOff() -> success: ");
 
       // Lambda Function: Check the number of arguments & implement
       success = [v_command](uint8_t len) -> bool
       {
         uint8_t num_arg = v_command.size() - 1;
-        if (num_arg == 1) {
-          SERIAL.print("torqueOff() : ");
-          SERIAL.println(dxl.torqueOff(v_command[1].toInt()));
-          return true;
-        } else return false;
+        if (num_arg == 1) { dxl.torqueOff(v_command[1].toInt()); return true; }
+        else return false;
       }(len);
-      if(success) {
-        SERIAL.println("Success");
-      } else {
-        SERIAL.println("Failed");
-      }
+      SERIAL.println(success);
       break;
       
     case HashCode("ledOn"):
@@ -871,22 +756,16 @@ bool dynamixel_function_callback(std::vector<String> v_command)
         * @param  id : ID of a specific DYNAMIXEL. Data type : unsigned int8
         * @example  dxl.ledOn(1);
         */
+      SERIAL.print("ledOn() -> success:");
 
       // Lambda Function: Check the number of arguments & implement
       success = [v_command](uint8_t len) -> bool
       {
         uint8_t num_arg = v_command.size() - 1;
-        if (num_arg == 1) {
-          SERIAL.print("ledOn() :");
-          SERIAL.println(dxl.ledOn(v_command[1].toInt()));
-          return true;
-        } else return false;
+        if (num_arg == 1) { dxl.ledOn(v_command[1].toInt()); return true; }
+        else return false;
       }(len);
-      if(success) {
-        SERIAL.println("Success");
-      } else {
-        SERIAL.println("Failed");
-      }
+      SERIAL.println(success);
       break;
       
     case HashCode("ledOff"):
@@ -894,22 +773,16 @@ bool dynamixel_function_callback(std::vector<String> v_command)
         * @param  id : ID of a specific DYNAMIXEL. Data type : unsigned int8
         * @example
         */
+      SERIAL.print("ledOff() -> success: ");
 
       // Lambda Function: Check the number of arguments & implement
       success = [v_command](uint8_t len) -> bool
       {
         uint8_t num_arg = v_command.size() - 1;
-        if (num_arg == 1) { 
-          SERIAL.print("ledOff() : ");
-          SERIAL.println(dxl.ledOff(v_command[1].toInt()));
-          return true;
-        } else return false;
+        if (num_arg == 1) { dxl.ledOff(v_command[1].toInt()); return true; }
+        else return false;
       }(len);
-      if(success) {
-        SERIAL.println("Success");
-      } else {
-        SERIAL.println("Failed");
-      }
+      SERIAL.println(success);
       break;
 
     case HashCode("setOperatingMode"):
@@ -925,22 +798,16 @@ bool dynamixel_function_callback(std::vector<String> v_command)
         *  5	     (0)      OP_CURRENT               	  Curernt Control Mode
         * @example  dxl.setOperatingMode(1, OP_POSITION);
         */
+      SERIAL.print("setOperatingMode() -> success: ");
 
       // Lambda Function: Check the number of arguments & implement
       success = [v_command](uint8_t len) -> bool
       {
         uint8_t num_arg = v_command.size() - 1;
-        if (num_arg == 2) {
-          SERIAL.print("setOperatingMode() : ");
-          SERIAL.println(dxl.setOperatingMode(v_command[1].toInt(), v_command[2].toInt()));
-          return true;
-        } else return false;
+        if (num_arg == 2) { dxl.setOperatingMode(v_command[1].toInt(), v_command[2].toInt()); return true; }
+        else return false;
       }(len);
-      if(success) {
-        SERIAL.println("Success");
-      } else {
-        SERIAL.println("Failed");
-      }
+      SERIAL.println(success);
       break;
       
     case HashCode("setGoalPosition"):
@@ -954,26 +821,17 @@ bool dynamixel_function_callback(std::vector<String> v_command)
         *   dxl.setGoalPosition(1, 512); //use default encoder value
         *   dxl.setGoalPosition(2, 45.0, UNIT_DEGREE); //use angle in degree
         */
+      SERIAL.print("setGoalPosition() -> success: ");
 
       // Lambda Function: Check the number of arguments & implement
       success = [v_command](uint8_t len) -> bool
       {
         uint8_t num_arg = v_command.size() - 1;
-        if (num_arg == 2) {
-          SERIAL.print("setGoalPosition() : ");
-          SERIAL.println(dxl.setGoalPosition(v_command[1].toInt(), v_command[2].toFloat()));
-          return true;
-        } else if (num_arg == 3) {
-          SERIAL.print("setGoalPosition() : ");
-          SERIAL.println(dxl.setGoalPosition(v_command[1].toInt(), v_command[2].toFloat()), v_command[3].toInt());
-          return true;
-        } else return false;
+        if (num_arg == 2) { dxl.setGoalPosition(v_command[1].toInt(), v_command[2].toFloat()); return true; }
+        else if (num_arg == 3) { dxl.setGoalPosition(v_command[1].toInt(), v_command[2].toFloat(), v_command[3].toInt()); return true; }
+        else return false;
       }(len);
-      if(success) {
-        SERIAL.println("Success");
-      } else {
-        SERIAL.println("Failed");
-      }
+      SERIAL.println(success);
       break;
 
     case HashCode("getPresentPosition"):
@@ -986,26 +844,17 @@ bool dynamixel_function_callback(std::vector<String> v_command)
         *   Serial.print(dxl.getPresentPosition(1)); //use default encoder value
         *   Serial.print(dxl.getPresentPosition(1, UNIT_DEGREE)); //use angle in degree
         */
+      SERIAL.print("getPresentPosition() -> success: ");
 
       // Lambda Function: Check the number of arguments & implement
       success = [v_command](uint8_t len) -> bool
       {
         uint8_t num_arg = v_command.size() - 1;
-        if (num_arg == 1) {
-          SERIAL.print("getPresentPosition() : ");
-          SERIAL.println(dxl.getPresentPosition(v_command[1].toInt()));
-          return true;
-        } else if (num_arg == 2) {
-          SERIAL.print("getPresentPosition() : ");
-          SERIAL.println(dxl.getPresentPosition(v_command[1].toInt(), v_command[2].toInt()));
-          return true;
-        } else return false;
+        if (num_arg == 1) { dxl.getPresentPosition(v_command[1].toInt()); return true; }
+        else if (num_arg == 2) { dxl.getPresentPosition(v_command[1].toInt(), v_command[2].toInt()); return true; }
+        else return false;
       }(len);
-      if(success) {
-        SERIAL.println("Success");
-      } else {
-        SERIAL.println("Failed");
-      }
+      SERIAL.println(success);
       break;
 
     case HashCode("setGoalVelocity"):
@@ -1021,26 +870,17 @@ bool dynamixel_function_callback(std::vector<String> v_command)
         *   dxl.setGoalVelocity(2, 10.5, UNIT_RPM); //use RPM
         *   dxl.setGoalVelocity(3, 15.0, UNIT_PERCENT); //use percentage (-100 ~ 100 %)
         */
+      SERIAL.print("setGoalVelocity() -> success: ");
 
       // Lambda Function: Check the number of arguments & implement
       success = [v_command](uint8_t len) -> bool
       {
         uint8_t num_arg = v_command.size() - 1;
-        if (num_arg == 2) {
-          SERIAL.print("setGoalVelocity() : ");
-          SERIAL.println(dxl.setGoalVelocity(v_command[1].toInt(), v_command[2].toFloat()));
-          return true;
-        } else if (num_arg == 3) {
-          SERIAL.print("setGoalVelocity() : ");
-          SERIAL.println(dxl.setGoalVelocity(v_command[1].toInt(), v_command[2].toFloat(), v_command[3].toInt()));
-          return true;
-        } else return false;
+        if (num_arg == 2) { dxl.setGoalVelocity(v_command[1].toInt(), v_command[2].toFloat()); return true; }
+        else if (num_arg == 3) { dxl.setGoalVelocity(v_command[1].toInt(), v_command[2].toFloat(), v_command[3].toInt()); return true; }
+        else return false;
       }(len);
-      if(success) {
-        SERIAL.println("Success");
-      } else {
-        SERIAL.println("Failed");
-      }
+      SERIAL.println(success);
       break;
       
     
@@ -1056,26 +896,17 @@ bool dynamixel_function_callback(std::vector<String> v_command)
         *   Serial.print(dxl.getPresentVelocity(2, UNIT_RPM)); //use RPM
         *   Serial.print(dxl.getPresentVelocity(3, UNIT_PERCENT)); //use percentage (-100 ~ 100 %)
         */
+      SERIAL.print("getPresentVelocity() -> success: ");
 
       // Lambda Function: Check the number of arguments & implement
       success = [v_command](uint8_t len) -> bool
       {
         uint8_t num_arg = v_command.size() - 1;
-        if (num_arg == 1) {
-          SERIAL.print("getPresentVelocity() : ");
-          SERIAL.println(dxl.getPresentVelocity(v_command[1].toInt()));
-          return true;
-        } else if (num_arg == 2) {
-          SERIAL.print("getPresentVelocity() : ");
-          SERIAL.println(dxl.getPresentVelocity(v_command[1].toInt(), v_command[2].toInt()));
-          return true;
-        } else return false;
+        if (num_arg == 1) { dxl.getPresentVelocity(v_command[1].toInt()); return true; }
+        else if (num_arg == 2) { dxl.getPresentVelocity(v_command[1].toInt(), v_command[2].toInt()); return true; }
+        else return false;
       }(len);
-      if(success) {
-        SERIAL.println("Success");
-      } else {
-        SERIAL.println("Failed");
-      }
+      SERIAL.println(success);
       break;
       
 
@@ -1090,26 +921,17 @@ bool dynamixel_function_callback(std::vector<String> v_command)
         *   dxl.setGoalPWM(1, 100); //use default raw value
         *   dxl.setGoalPWM(2, 50.0, UNIT_PERCENT); //use percentage (-100 ~ 100 %)
         */
+      SERIAL.print("setGoalPWM() -> success: ");
 
       // Lambda Function: Check the number of arguments & implement
       success = [v_command](uint8_t len) -> bool
       {
         uint8_t num_arg = v_command.size() - 1;
-        if (num_arg == 2) {
-          SERIAL.print("setGoalPWM() : ");
-          SERIAL.println(dxl.setGoalPWM(v_command[1].toInt(), v_command[2].toFloat()));
-          return true;
-        } else if (num_arg == 3) {
-          SERIAL.print("setGoalPWM() : ");
-          SERIAL.println(dxl.setGoalPWM(v_command[1].toInt(), v_command[2].toFloat(), v_command[3].toInt()));
-          return true;
-        } else return false;
+        if (num_arg == 2) { dxl.setGoalPWM(v_command[1].toInt(), v_command[2].toFloat()); return true; }
+        else if (num_arg == 3) { dxl.setGoalPWM(v_command[1].toInt(), v_command[2].toFloat(), v_command[3].toInt()); return true; }
+        else return false;
       }(len);
-      if(success) {
-        SERIAL.println("Success");
-      } else {
-        SERIAL.println("Failed");
-      }
+      SERIAL.println(success);
       break;
       
     case HashCode("getPresentPWM"):
@@ -1122,26 +944,17 @@ bool dynamixel_function_callback(std::vector<String> v_command)
         *   Serial.print(dxl.getPresentPWM(1)); //use default raw value
         *   Serial.print(dxl.getPresentPWM(2, UNIT_PERCENT)); //use percentage (-100 ~ 100 %)
         */
+      SERIAL.print("getPresentPWM() -> success: ");
 
       // Lambda Function: Check the number of arguments & implement
       success = [v_command](uint8_t len) -> bool
       {
         uint8_t num_arg = v_command.size() - 1;
-        if (num_arg == 1) {
-          SERIAL.print("getPresentPWM() : ");
-          SERIAL.println(dxl.getPresentPWM(v_command[1].toInt()));
-          return true;
-        } else if (num_arg == 2) {
-          SERIAL.print("getPresentPWM() : ");
-          SERIAL.println(dxl.getPresentPWM(v_command[1].toInt(), v_command[2].toInt()));
-          return true;
-        } else return false;
+        if (num_arg == 1) { dxl.getPresentPWM(v_command[1].toInt()); return true; }
+        else if (num_arg == 2) { dxl.getPresentPWM(v_command[1].toInt(), v_command[2].toInt()); return true; }
+        else return false;
       }(len);
-      if(success) {
-        SERIAL.println("Success");
-      } else {
-        SERIAL.println("Failed");
-      }
+      SERIAL.println(success);
       break;
       
     case HashCode("setGoalCurrent"):
@@ -1157,26 +970,17 @@ bool dynamixel_function_callback(std::vector<String> v_command)
         *   dxl.setGoalCurrent(2, 1000.0, UNIT_MILLI_MAPERE); //use mA
         *   dxl.setGoalCurrent(3, 50.0, UNIT_PERCENT); //use percentage (-100 ~ 100 %)
         */
+      SERIAL.println("setGoalCurrent() -> success: ");
 
       // Lambda Function: Check the number of arguments & implement
       success = [v_command](uint8_t len) -> bool
       {
         uint8_t num_arg = v_command.size() - 1;
-        if (num_arg == 2) {
-          SERIAL.println("setGoalCurrent() : ");
-          SERIAL.println(dxl.setGoalCurrent(v_command[1].toInt(), v_command[2].toFloat()));
-          return true;
-        } else if (num_arg == 3) {
-          SERIAL.println("setGoalCurrent() : ");
-          SERIAL.println(dxl.setGoalCurrent(v_command[1].toInt(), v_command[2].toFloat(), v_command[3].toInt()));
-          return true;
-        } else return false;
+        if (num_arg == 2) { dxl.setGoalCurrent(v_command[1].toInt(), v_command[2].toFloat()); return true; }
+        else if (num_arg == 3) { dxl.setGoalCurrent(v_command[1].toInt(), v_command[2].toFloat(), v_command[3].toInt()); return true; }
+        else return false;
       }(len);
-      if(success) {
-        SERIAL.println("Success");
-      } else {
-        SERIAL.println("Failed");
-      }
+      SERIAL.println(success);
       break;
       
     case HashCode("getPresentCurrent"):
@@ -1191,70 +995,49 @@ bool dynamixel_function_callback(std::vector<String> v_command)
         *   Serial.print(dxl.getPresentCurrent(2, UNIT_MILLI_MAPERE)); //use mA
         *   Serial.print(dxl.getPresentCurrent(3, UNIT_PERCENT)); //use percentage (-100 ~ 100 %)
         */
+      SERIAL.print("getPresentCurrent() -> success: ");
       
       // Lambda Function: Check the number of arguments & implement
       success = [v_command](uint8_t len) -> bool
       {
         uint8_t num_arg = v_command.size() - 1;
-        if (num_arg == 1) {
-          SERIAL.print("getPresentCurrent() : ");
-          SERIAL.println(dxl.getPresentCurrent(v_command[1].toInt()));
-          return true;
-        } else if (num_arg == 2) {
-          SERIAL.print("getPresentCurrent() : ");
-          SERIAL.println(dxl.getPresentCurrent(v_command[1].toInt(), v_command[2].toInt()));
-          return true;
-        } else return false;
+        if (num_arg == 1) { dxl.getPresentCurrent(v_command[1].toInt()); return true; }
+        else if (num_arg == 2) { dxl.getPresentCurrent(v_command[1].toInt(), v_command[2].toInt()); return true; }
+        else return false;
       }(len);
-      if(success) {
-        SERIAL.println("Success");
-      } else {
-        SERIAL.println("Failed");
-      }
+      SERIAL.println(success);
       break;
       
     case HashCode("readControlTableItem"):
       /**
         * @example
         */
+      SERIAL.print("readControlTableItem() -> success: ");
 
       // Lambda Function: Check the number of arguments & implement
       success = [v_command](uint8_t len) -> bool
       {
         uint8_t num_arg = v_command.size() - 1;
-        if (num_arg == 2) {
-          SERIAL.print("readControlTableItem() : ");
-          SERIAL.println(dxl.readControlTableItem(v_command[1].toInt(), v_command[2].toInt()));
-          return true;
-        } else return false;
+        if (num_arg == 2) { dxl.readControlTableItem(v_command[1].toInt(), v_command[2].toInt()); return true; }
+        else return false;
       }(len);
-      if(success) {
-        SERIAL.println("Success");
-      } else {
-        SERIAL.println("Failed");
-      }
+      SERIAL.println(success);
       break;
       
     case HashCode("writeControlTableItem"):
       /**
         * @example
         */
+      SERIAL.print("writeControlTableItem() -> success: ");
 
       // Lambda Function: Check the number of arguments & implement
       success = [v_command](uint8_t len) -> bool
       {
         uint8_t num_arg = v_command.size() - 1;
-        if (num_arg == 3) {
-          SERIAL.print("writeControlTableItem() : ");
-          SERIAL.println(dxl.writeControlTableItem(v_command[1].toInt(), v_command[2].toInt(), v_command[3].toInt()));
-          return true;
-        } else return false;
+        if (num_arg == 3) { dxl.writeControlTableItem(v_command[1].toInt(), v_command[2].toInt(), v_command[3].toInt()); return true; }
+        else return false;
       }(len);
-      if(success) {
-        SERIAL.println("Success");
-      } else {
-        SERIAL.println("Failed");
-      }
+      SERIAL.println(success);
       break;
 
     // sync write
@@ -1265,7 +1048,7 @@ bool dynamixel_function_callback(std::vector<String> v_command)
       * @example Set velocity of motor 1: 10, motor 2: 50
       *          -> /syncWrite,velocity,10,50;
       */
-      SERIAL.print("syncWrite() : ");
+      SERIAL.print("syncWrite() -> success: ");
 
       // Lambda Function: Check the number of arguments & implement
       success = [v_command](uint8_t len) -> bool
@@ -1292,7 +1075,7 @@ bool dynamixel_function_callback(std::vector<String> v_command)
         else if (target_name == "velocity") {
           SERIAL.println(target_name);
           for (int i=0; i<DXL_ID_CNT; i++) {
-            sw_data[i].goal_velocity = v_command[2+i].toFloat();
+            sw_data[i].goal_velocity = v_command[2+i].toInt();
             SERIAL.println(sw_data[i].goal_velocity);
           }
           sw_infos_goal_velocity.is_info_changed = true;
@@ -1314,59 +1097,35 @@ bool dynamixel_function_callback(std::vector<String> v_command)
       /**
         * @example
         */
-      SERIAL.print("torqueOnAll() : ");
+      SERIAL.print("torqueOnAll() -> success: ");
 
       // Lambda Function: Check the number of arguments & implement
       success = [v_command](uint8_t len) -> bool
       {
         uint8_t num_arg = v_command.size() - 1;
-        if (num_arg == 0) {
-          SERIAL.println(dxl.torqueOn(BROADCAST_ID));
-          return true;
-        } else return false;
+        if (num_arg == 0) { dxl.torqueOn(BROADCAST_ID); return true; }
+        else return false;
       }(len);
-      if(success) {
-        SERIAL.println("Success");
-      } else {
-        SERIAL.println("Failed");
-      }
+      SERIAL.println(success);
       break;
 
     case HashCode("torqueOffAll"):
       /**
         * @example
         */
-      SERIAL.print("torqueOffAll() : ");
+      SERIAL.print("torqueOffAll() -> success: ");
 
       // Lambda Function: Check the number of arguments & implement
       success = [v_command](uint8_t len) -> bool
       {
         uint8_t num_arg = v_command.size() - 1;
-        if (num_arg == 0) {
-          SERIAL.println(dxl.torqueOff(BROADCAST_ID));
-          return true;
-        } else return false;
+        if (num_arg == 0) { dxl.torqueOff(BROADCAST_ID); return true; }
+        else return false;
       }(len);
-      if(success) {
-        SERIAL.println("Success");
-      } else {
-        SERIAL.println("Failed");
-      }
+      SERIAL.println(success);
       break;
-    
-    case HashCode("homing"):
-      /**
-        * @example
-        */
-      // Lambda Function: Check the number of arguments & implement
-      success = [v_command](uint8_t len) -> bool
-      {
-        uint8_t num_arg = v_command.size() - 1;
-        if (num_arg == 0) {
-          op_mode = kHoming;
-          return true;
-        } else return false;
-      }(len);
+      
+      SERIAL.println(success);
       break;
 
     default:
@@ -1374,106 +1133,13 @@ bool dynamixel_function_callback(std::vector<String> v_command)
   }
 }
 
-/**
-* @author DY
-* @brief
-*   Homing mode for Dynamixel motors
-*   Velocity mode -> go -> limit sensor signal -> save encoder(home position) & stop -> set 'homing offset'
-* @note
-*   obj_detect = 1 --> object doesn't exist (light pass)
-*   obj_detect = 0 --> object exist (no light pass)
-* @
-*/
-bool homing(){
 
-  // torque off -> homing_offset = 0 -> setOperatingMode() -> torque on
-  // Must write after torqueOff()
-  dxl.torqueOff(BROADCAST_ID); SERIAL.println("Torque Off...");
-  for (int i=0; i<DXL_ID_CNT; i++) {
-    homing_offset[i] = 0;
-    dxl.writeControlTableItem(HOMING_OFFSET, DXL_ID_LIST[i], 0);
-  }
-
-  for (int i=0; i<DXL_ID_CNT; i++) {
-    if (dxl.setOperatingMode(DXL_ID_LIST[i], OP_VELOCITY)) {
-      SERIAL.println("Change op mode to OP_VELOCITY");
-    } else {
-      SERIAL.println("dxl.setOperatingMode() OP_VELOCITY Failed");
-    }
-  }
-  dxl.torqueOn(BROADCAST_ID); SERIAL.println("Torque On...");
-  
-  // homing
-  SERIAL.println("Homing mode start ...");
-  while(true) {
-
-    // During homing, dxl_tate_read() on "dynamixel_node" doesn't work.
-    if(xSemaphoreTake(mutex, 100 / portTICK_PERIOD_MS) == pdTRUE) {
-      dxl_state_read();
-      xSemaphoreGive(mutex);
-    }
-
-    // Check limit sensor, and set velocity, respectively.
-    for (int i=0; i<DXL_ID_CNT; i++) {
-      if (limit_sensor_signal[i] == HIGH) {
-        sw_data[i].goal_velocity = HOMING_VELOCITY;
-      }
-      else if (limit_sensor_signal[i] == LOW) {
-        sw_data[i].goal_velocity = 0;
-      }
-    }
-    sw_infos_goal_velocity.is_info_changed = true;
-
-    if(xSemaphoreTake(mutex, 100 / portTICK_PERIOD_MS) == pdTRUE) {
-      dxl.syncWrite(&sw_infos_goal_velocity);
-      xSemaphoreGive(mutex);
-    }
-
-    // all motors finish homing, stop
-    // std::all_of --> c++11
-    bool all_zeros = std::all_of(std::begin(limit_sensor_signal), std::end(limit_sensor_signal), [](int8_t v) {return v==LOW;});  // LOW(0) : PinStatus --> Commom.h
-    if (all_zeros) {
-      // save home positions
-      for (int i=0; i<DXL_ID_CNT; i++) {
-        homing_offset[i] = present_pos[i];
-        SERIAL.print("Homing offset of Motor ID ");
-        SERIAL.print(DXL_ID_LIST[i]);
-        SERIAL.print(" = ");
-        SERIAL.println(homing_offset[i]);
-        SERIAL.println("Homing offset values update");
-      }
-      break;
-    }
-    vTaskDelay( 10 / portTICK_PERIOD_MS ); // Never delete
-  }
-
-  // torque off -> save homing_offset(control table 22) -> move to 0
-  // Must write after torqueOff()
-  dxl.torqueOff(BROADCAST_ID); SERIAL.println("Torque Off...");
-  for (int i=0; i<DXL_ID_CNT; i++) {
-    dxl.writeControlTableItem(HOMING_OFFSET, DXL_ID_LIST[i], -homing_offset[i]);
-    dxl.setOperatingMode(DXL_ID_LIST[i], OP_EXTENDED_POSITION);
-  }
-  dxl.torqueOn(BROADCAST_ID);
-
-  // syncWrite to move to 0
-  for (int i=0; i<DXL_ID_CNT; i++) {
-    sw_data[i].goal_position = 0;
-  }
-  sw_infos_goal_position.is_info_changed = true;
-  dxl.syncWrite(&sw_infos_goal_position);
-
-  op_mode = kEnable;
-  SERIAL.println("Homing finish");
-}
-
-
-void print_on_mutex(SemaphoreHandle_t mutex, String msg)
+void print_on_mutex(SemaphoreHandle_t serial_mutex, String msg)
 {
-  xSemaphoreTake(mutex, portMAX_DELAY);
+  xSemaphoreTake(serial_mutex, portMAX_DELAY);
   SERIAL.println(msg);
   SERIAL.flush();
-  xSemaphoreGive(mutex);
+  xSemaphoreGive(serial_mutex);
 }
 
 //*****************************************************************
@@ -1488,7 +1154,7 @@ void print_task_info()
   int measurement;
   static char ptrTaskList[400]; //temporary string buffer for task stats
   
-  xSemaphoreTake(mutex, portMAX_DELAY);
+  xSemaphoreTake(serial_mutex, portMAX_DELAY);
   SERIAL.flush();
   SERIAL.println("");			 
   SERIAL.println("****************************************************");
@@ -1534,8 +1200,9 @@ void print_task_info()
   
   SERIAL.println("****************************************************");
   SERIAL.flush();
-  xSemaphoreGive(mutex);
+  xSemaphoreGive(serial_mutex);
 }
+
 
 
 //**************************************************************************
@@ -1572,15 +1239,11 @@ void DelayMsUntil(TickType_t *previousWakeTime, int ms)
 }
 
 
-
-
-
 //*****************************************************************
 void setup() 
 {
   serial_init();
   dynamixel_init();
-  io_init();
   // Create the threads that will be managed by the rtos
   // Sets the stack size and priority of each task
   // Also initializes a handler pointer to each task, which are important to communicate with and retrieve info from tasks
@@ -1601,21 +1264,13 @@ void setup()
 
   xTaskCreate(thread_Dynamixel_node,
     "Task Dynamixel",
-    512,
+    256,
     NULL,
     tskIDLE_PRIORITY + 1,
     &Handle_DynamixelTask);
 
-  xTaskCreate(thread_Dynamixel_io_node,
-    "Task Dynamixel I/O",
-    128,
-    NULL,
-    tskIDLE_PRIORITY + 1,
-    &Handle_DynamixelIOTask);
-
   // Start the RTOS, this function will never return and will schedule the tasks.
   vTaskStartScheduler();
-
   // error scheduler failed to start
   // should never get here
   while(1)
