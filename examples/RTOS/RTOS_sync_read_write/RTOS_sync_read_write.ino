@@ -362,6 +362,9 @@ void dynamixel_init()
     if(!dxl.writeControlTableItem(POSITION_P_GAIN, i, DXL_POSITION_P_GAIN)) SERIAL.println("writeControlTableItem(POSITION_P_GAIN) Fail.");
     if(!dxl.writeControlTableItem(POSITION_I_GAIN, i, DXL_POSITION_I_GAIN)) SERIAL.println("writeControlTableItem(POSITION_I_GAIN) Fail.");
     if(!dxl.writeControlTableItem(POSITION_D_GAIN, i, DXL_POSITION_D_GAIN)) SERIAL.println("writeControlTableItem(POSITION_D_GAIN) Fail.");
+
+    // Current Limit
+    if(!dxl.writeControlTableItem(CURRENT_LIMIT, i, DXL_CURRENT_LIMIT)) SERIAL.println("writeControlTableItem(CURRENT_LIMIT) Fail.");
   }
   dxl.torqueOff(BROADCAST_ID);
 
@@ -1309,6 +1312,7 @@ bool dynamixel_function_callback(std::vector<String> v_command)
         }
         return true;
       }(len);
+      break;
 
       case HashCode("torqueOnAll"):
       /**
@@ -1378,7 +1382,7 @@ bool dynamixel_function_callback(std::vector<String> v_command)
 * @author DY
 * @brief
 *   Homing mode for Dynamixel motors
-*   Velocity mode -> go -> limit sensor signal -> save encoder(home position) & stop -> set 'homing offset'
+*   Current mode -> go -> limit sensor signal -> save encoder(home position) & stop -> set 'homing offset'
 * @note
 *   obj_detect = 1 --> object doesn't exist (light pass)
 *   obj_detect = 0 --> object exist (no light pass)
@@ -1395,14 +1399,22 @@ bool homing(){
   }
 
   for (int i=0; i<DXL_ID_CNT; i++) {
-    if (dxl.setOperatingMode(DXL_ID_LIST[i], OP_VELOCITY)) {
-      SERIAL.println("Change op mode to OP_VELOCITY");
+    if (dxl.setOperatingMode(DXL_ID_LIST[i], OP_CURRENT)) {
+      SERIAL.println("Change op mode to OP_CURRENT");
     } else {
-      SERIAL.println("dxl.setOperatingMode() OP_VELOCITY Failed");
+      SERIAL.println("dxl.setOperatingMode() OP_CURRENT Failed");
     }
   }
   dxl.torqueOn(BROADCAST_ID); SERIAL.println("Torque On...");
   
+  /**
+  * @brief limit sensor logic
+  */
+  // init velocity
+  for (int i=0; i<DXL_ID_CNT; i++) {
+    sw_data[i].goal_current = HOMING_CURRENT;
+  }
+
   // homing
   SERIAL.println("Homing mode start ...");
   while(true) {
@@ -1416,16 +1428,18 @@ bool homing(){
     // Check limit sensor, and set velocity, respectively.
     for (int i=0; i<DXL_ID_CNT; i++) {
       if (limit_sensor_signal[i] == HIGH) {
-        sw_data[i].goal_velocity = HOMING_VELOCITY;
+        sw_data[i].goal_current = HOMING_CURRENT;
       }
-      else if (limit_sensor_signal[i] == LOW) {
-        sw_data[i].goal_velocity = 0;
+      else if (limit_sensor_signal[i] == LOW && sw_data[i].goal_current != 0) {
+        homing_offset[i] = present_pos[i];
+        SERIAL.println(homing_offset[i]);
+        sw_data[i].goal_current = 0;
       }
     }
-    sw_infos_goal_velocity.is_info_changed = true;
+    sw_infos_goal_current.is_info_changed = true;
 
     if(xSemaphoreTake(mutex, 100 / portTICK_PERIOD_MS) == pdTRUE) {
-      dxl.syncWrite(&sw_infos_goal_velocity);
+      dxl.syncWrite(&sw_infos_goal_current);
       xSemaphoreGive(mutex);
     }
 
@@ -1435,7 +1449,7 @@ bool homing(){
     if (all_zeros) {
       // save home positions
       for (int i=0; i<DXL_ID_CNT; i++) {
-        homing_offset[i] = present_pos[i];
+        // homing_offset[i] = present_pos[i];
         SERIAL.print("Homing offset of Motor ID ");
         SERIAL.print(DXL_ID_LIST[i]);
         SERIAL.print(" = ");
@@ -1452,7 +1466,7 @@ bool homing(){
   dxl.torqueOff(BROADCAST_ID); SERIAL.println("Torque Off...");
   for (int i=0; i<DXL_ID_CNT; i++) {
     dxl.writeControlTableItem(HOMING_OFFSET, DXL_ID_LIST[i], -homing_offset[i]);
-    dxl.setOperatingMode(DXL_ID_LIST[i], OP_EXTENDED_POSITION);
+    dxl.setOperatingMode(DXL_ID_LIST[i], OP_CURRENT_BASED_POSITION);
   }
   dxl.torqueOn(BROADCAST_ID);
 
