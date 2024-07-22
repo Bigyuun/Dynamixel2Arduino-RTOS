@@ -119,7 +119,7 @@ using namespace ControlTableItem;
 
 #define HOMING_DIRECTION 1
 #define HOMING_VELOCITY  100 * HOMING_DIRECTION
-#define HOMING_CURRENT  60 * HOMING_DIRECTION
+#define HOMING_CURRENT  100 * HOMING_DIRECTION
 
 
 enum OpMode{

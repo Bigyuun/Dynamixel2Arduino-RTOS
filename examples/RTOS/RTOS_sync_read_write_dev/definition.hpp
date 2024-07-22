@@ -102,11 +102,14 @@ using namespace ControlTableItem;
 #define DXL_BAUDRATE  57600 // Set Port baudrate to 57600bps. This has to match with DYNAMIXEL baudrate.
 #define BROADCAST_ID  254
 #define DYNAMIXEL_PROTOCOL_VERSION 2.0  // Set Port Protocol Version. This has to match with DYNAMIXEL protocol version.
-#define OP_MODE   OP_EXTENDED_POSITION
+// #define OP_MODE   OP_EXTENDED_POSITION
+#define OP_MODE   OP_CURRENT_BASED_POSITION
 
 #define DXL_POSITION_P_GAIN 3000
 #define DXL_POSITION_I_GAIN 0
 #define DXL_POSITION_D_GAIN 3000
+
+#define DXL_CURRENT_LIMIT 200
 // #define VELOCITY_P_GAIN 
 // #define VELOCITY_I_GAIN
 
@@ -115,7 +118,8 @@ using namespace ControlTableItem;
 #define SERIAL_WRITE_FREQUENCY  100   // Hz
 
 #define HOMING_DIRECTION 1
-#define HOMING_VELOCITY  300 * HOMING_DIRECTION
+#define HOMING_VELOCITY  100 * HOMING_DIRECTION
+#define HOMING_CURRENT  60 * HOMING_DIRECTION
 
 
 enum OpMode{
